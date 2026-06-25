@@ -1,0 +1,45 @@
+# yt-video — 100% Free YouTube Pipeline
+# Dependencies
+
+# ── Core AI / LLM ────────────────────────────────────────────────────────────
+openai>=1.30.0                 # script generation (gpt-4o-mini ~$0.06/mo)
+python-dotenv>=1.0.0           # .env loading
+
+# ── FREE TTS — Microsoft Edge TTS ────────────────────────────────────────────
+# Replaces: ElevenLabs ($22–$99/mo)  →  saves $22–$99/month
+edge-tts>=6.1.9                # 300+ voices, completely free, no API key
+pydub>=0.25.1                  # audio chunk merging (optional; ffmpeg fallback used if missing)
+
+# ── FREE Image Generation — Pollinations.ai ─────────────────────────────────
+# Replaces: DALL-E / Flux API ($3–$12/mo)  →  saves $3–$12/month
+# No package needed — uses requests directly (already a dependency)
+
+# ── FREE Trend Signals ───────────────────────────────────────────────────────
+# Replaces: NewsAPI ($49/mo)  →  saves $49/month
+pytrends>=4.9.2                # Google Trends India (free)
+# praw removed — replaced by RSS feeds + yfinance news (no registration required)
+
+# ── Market Data — Yahoo Finance (free) ───────────────────────────────────────
+yfinance>=0.2.40               # OHLCV + live quotes
+mplfinance>=0.12.10b0          # candlestick charts
+matplotlib>=3.8.0
+pandas>=2.0.0
+
+# ── Video Assembly — Local / GitHub Actions (free) ───────────────────────────
+# Replaces: AWS Lambda ($5–$20/mo)  →  saves $5–$20/month
+moviepy>=2.0.0                 # video composition
+Pillow>=10.0.0                 # image overlays (ticker, stat cards)
+numpy>=1.26.0
+
+# ── YouTube Upload ────────────────────────────────────────────────────────────
+google-api-python-client>=2.0.0
+google-auth-oauthlib>=1.0.0
+
+# ── HTTP ──────────────────────────────────────────────────────────────────────
+requests>=2.31.0
+requests-oauthlib>=2.0.0   # X posting with OAuth 1.0a user context
+
+# ── Optional: local speech transcription (faster-whisper, free) ──────────────
+# Install manually if you want local (no OpenAI Whisper API cost):
+#   pip install faster-whisper
+# Requires Python ≤ 3.12 on some platforms due to ctranslate2.

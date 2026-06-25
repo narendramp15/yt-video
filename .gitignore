@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+
+# Pipeline output (generated files — never commit)
+output/
+
+# Editors
+.vscode/
+.idea/
+*.swp

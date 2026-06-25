@@ -1,0 +1,143 @@
+"""
+config.py — yt-video (100% free pipeline)
+
+All secrets loaded from .env via python-dotenv.
+Cost breakdown vs original:
+  ElevenLabs ($22-99/mo)  → REMOVED  (replaced by edge-tts, free)
+  DALL-E / Flux ($3-12/mo) → REMOVED  (replaced by Pollinations.ai, free)
+  NewsAPI ($49/mo)         → REMOVED  (replaced by pytrends + RSS feeds + yfinance news, free)
+  AWS Lambda ($5-20/mo)    → REMOVED  (local + GitHub Actions)
+
+Required .env keys:
+  OPENAI_API_KEY        — script generation + Whisper fallback
+  YOUTUBE_CLIENT_SECRET — path to client_secret.json (default: client_secret.json)
+  CHANNEL_NAME          — your YouTube channel name
+
+Optional .env keys:
+  SCRIPT_MODEL          — gpt-4o-mini (default) | deepseek-chat | deepseek-reasoner
+  DEEPSEEK_API_KEY      — only needed when SCRIPT_MODEL starts with "deepseek"
+  EDGE_TTS_VOICE        — Microsoft Edge TTS voice (default: en-IN-NeerjaNeural)
+  POLLINATIONS_MODEL    — image generation model: flux (default) | turbo | flux-realism
+"""
+
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+
+def _env_flag(name: str, default: bool = True) -> bool:
+  raw = os.getenv(name)
+  if raw is None:
+    return default
+  return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _resolve_project_path(raw: str | None) -> str | None:
+  if not raw:
+    return None
+  path = Path(raw)
+  return str(path if path.is_absolute() else _PROJECT_ROOT / path)
+
+# Project root is one level up from this file (yt_video/ → yt-ai-factory/)
+# Resolved at import time using __file__ so os.chdir() in main.py doesn't affect it.
+_PROJECT_ROOT = Path(__file__).parent.parent
+
+# Shared persistent state directory for memory/db files (project-root/state)
+STATE_DIR = _PROJECT_ROOT / "state"
+
+# Always load .env from the project root (absolute path), regardless of CWD.
+load_dotenv(_PROJECT_ROOT / ".env", override=True)
+
+_DEFAULT_CLIENT_SECRET = str(_PROJECT_ROOT / "client_secret.json")
+
+# Resolve YOUTUBE_CLIENT_SECRET: if the .env value is a relative path,
+# anchor it to the project root so it works regardless of CWD.
+_raw_secret = os.getenv("YOUTUBE_CLIENT_SECRET", _DEFAULT_CLIENT_SECRET)
+_RESOLVED_CLIENT_SECRET = (
+    str(_PROJECT_ROOT / _raw_secret) if not os.path.isabs(_raw_secret) else _raw_secret
+)
+
+
+class Config:
+    # ── Core (required) ──────────────────────────────────────────────────
+    OPENAI_API_KEY        = os.getenv("OPENAI_API_KEY")
+    YOUTUBE_CLIENT_SECRET = _RESOLVED_CLIENT_SECRET
+    CHANNEL_NAME          = os.getenv("CHANNEL_NAME")
+    DEFAULT_CATEGORY      = os.getenv("DEFAULT_CATEGORY", "25")   # 25 = News & Politics
+
+    # ── Script generation ─────────────────────────────────────────────────
+    # gpt-4o-mini (~$0.06/mo) | deepseek-chat (~$0.01/mo) | deepseek-reasoner
+    SCRIPT_MODEL   = os.getenv("SCRIPT_MODEL", "gpt-4o-mini")
+    DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+
+    # ── FREE TTS — Microsoft Edge TTS ────────────────────────────────────
+    # 300+ voices, completely free, no API key needed
+    # Indian voices: en-IN-NeerjaNeural (female) | en-IN-PrabhatNeural (male)
+    # Full list: https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support
+    EDGE_TTS_VOICE = os.getenv("EDGE_TTS_VOICE", "en-IN-NeerjaNeural")
+
+    # ── Image Generation — pluggable provider chain ──────────────────────
+    # IMAGE_PROVIDERS is an ordered, comma-separated chain tried per image;
+    # the first provider that returns a valid image wins. The PIL gradient is
+    # always the final offline fallback, so the pipeline never hard-fails.
+    #   pollinations  — FREE, no key (default)
+    #   openai        — PAID (gpt-image-1 / DALL-E); needs OPENAI_API_KEY
+    # Examples:
+    #   IMAGE_PROVIDERS=pollinations            # free only (default)
+    #   IMAGE_PROVIDERS=openai,pollinations     # paid OpenAI first, free fallback
+    # NOTE: DeepSeek has NO image-generation API, so it cannot be an image
+    # provider here. To add another service (Stability, Gemini, …) register a
+    # `_fetch_<name>` function in image_service._IMAGE_PROVIDERS.
+    IMAGE_PROVIDERS = [
+        p.strip().lower()
+        for p in os.getenv("IMAGE_PROVIDERS", "pollinations").split(",")
+        if p.strip()
+    ]
+
+    # Pollinations provider (free). Set POLLINATIONS_KEY for authenticated
+    # access (removes rate limits). Get key at: https://enter.pollinations.ai/
+    # Models: flux (default), flux-realism, turbo
+    POLLINATIONS_MODEL = os.getenv("POLLINATIONS_MODEL", "flux")
+    POLLINATIONS_KEY   = os.getenv("POLLINATIONS_KEY")
+
+    # OpenAI image provider (paid) — only used when 'openai' is in IMAGE_PROVIDERS.
+    # Reuses OPENAI_API_KEY. quality is model-specific:
+    #   gpt-image-1 → low | medium | high | auto      dall-e-3 → standard | hd
+    OPENAI_IMAGE_MODEL   = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1")
+    OPENAI_IMAGE_QUALITY = os.getenv("OPENAI_IMAGE_QUALITY", "low")
+
+    # ── Optional background music (royalty-free / CC0 tracks) ──────────────
+    # Drop tracks into assets/music/ or point BG_MUSIC_TRACK at one file.
+    BACKGROUND_MUSIC_ENABLED = _env_flag("BACKGROUND_MUSIC_ENABLED", True)
+    BACKGROUND_MUSIC_TRACK = _resolve_project_path(os.getenv("BACKGROUND_MUSIC_TRACK"))
+    BACKGROUND_MUSIC_DIR = _resolve_project_path(os.getenv("BACKGROUND_MUSIC_DIR", "assets/music"))
+
+    # ── X / Twitter Trends ───────────────────────────────────────────────
+    # Optional: enables X trending topics as an additional signal source.
+    # Get a Bearer Token at: https://developer.twitter.com/en/portal/dashboard
+    # Free tier is write-only; Basic ($100/mo) or Academic gives read access.
+    # If not set, X trends are silently skipped.
+    TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
+    # WOEID for location — 23424848 = India, 1 = Worldwide
+    # Find WOEIDs: http://woeid.rosselliot.co.nz/
+    TWITTER_WOEID = int(os.getenv("TWITTER_WOEID", "23424848"))
+
+    # ── X / Twitter Posting ──────────────────────────────────────────────
+    # Optional: post one announcement after a successful public YouTube upload.
+    # Uses app/user keys with X API v2 write endpoint.
+    X_CONSUMER_KEY = os.getenv("X_CONSUMER_KEY")
+    X_CONSUMER_SECRET = os.getenv("X_CONSUMER_SECRET")
+    X_ACCESS_TOKEN = os.getenv("X_ACCESS_TOKEN")
+    X_ACCESS_TOKEN_SECRET = os.getenv("X_ACCESS_TOKEN_SECRET")
+    X_DAILY_POST_LIMIT = int(os.getenv("X_DAILY_POST_LIMIT", "3"))
+    X_POST_PUBLIC_ONLY = os.getenv("X_POST_PUBLIC_ONLY", "true").lower() not in {"0", "false", "no", "off"}
+
+    # Shared persistent state directory (project-root/state)
+    STATE_DIR = STATE_DIR
+
+    # Paths for persistent memory files (stored under project-root/state)
+    YT_PIPELINE_STATE_PATH = str(STATE_DIR / "yt_pipeline_state.json")
+    YT_ANALYTICS_MEMORY_PATH = str(STATE_DIR / "yt_analytics_memory.json")
+
+
+config = Config()
