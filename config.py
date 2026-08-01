@@ -63,7 +63,17 @@ class Config:
     OPENAI_API_KEY        = os.getenv("OPENAI_API_KEY")
     YOUTUBE_CLIENT_SECRET = _RESOLVED_CLIENT_SECRET
     CHANNEL_NAME          = os.getenv("CHANNEL_NAME")
-    DEFAULT_CATEGORY      = os.getenv("DEFAULT_CATEGORY", "25")   # 25 = News & Politics
+    # Fallback only — packaging_service.resolve_category_id() maps per-topic.
+    # 22 = People & Blogs (safer default than always News & Politics).
+    DEFAULT_CATEGORY      = os.getenv("DEFAULT_CATEGORY", "22")
+
+    # ── Video packaging / retention craft ────────────────────────────────
+    # Full-screen chapter cards every scene break kill watch time — off by default.
+    CHAPTER_CARDS_ENABLED = _env_flag("CHAPTER_CARDS_ENABLED", False)
+    # Intro card at t=0 fights the spoken hook — off by default.
+    INTRO_CARD_ENABLED = _env_flag("INTRO_CARD_ENABLED", False)
+    # Overlay 3–5 word hook text on thumbnails (Pillow) for mobile CTR.
+    THUMBNAIL_TEXT_ENABLED = _env_flag("THUMBNAIL_TEXT_ENABLED", True)
 
     # ── Script generation ─────────────────────────────────────────────────
     # gpt-4o-mini (~$0.06/mo) | deepseek-chat (~$0.01/mo) | deepseek-reasoner

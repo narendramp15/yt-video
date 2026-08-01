@@ -612,28 +612,36 @@ def generate_thumbnail(
     out_filename: str = "thumbnail.jpg",
     movers: list[str] | None = None,   # kept for backward compat, ignored
     prompt_override: str = "",
+    hook_text: str = "",
 ) -> str:
     """
-    Generate a YouTube thumbnail image using Pollinations.ai.
-    Thumbnail size: 1280x720 (YouTube standard).
+    Generate a YouTube thumbnail (1280x720).
+
+    AI paints a text-free subject image; Pillow then overlays a 3–5 word
+    mobile CTR hook (unless THUMBNAIL_TEXT_ENABLED=0).
 
     Returns: path to saved thumbnail.
     """
+    from services.packaging_service import derive_thumbnail_hook
+
     subject = topic or title
     clean_override = _normalize_visual_text(prompt_override)
     # Subject leads, style trails. Prefer the script-LLM thumbnail prompt; else
     # use the (cleaned) title/topic directly. No keyword expansion — the script
     # LLM already understands the topic; substring matching produced wrong
     # categories (e.g. "stock" → trading charts on unrelated videos).
-    head = clean_override or _normalize_visual_text(f"{title}. {subject}" if subject and subject != title else (title or subject))
+    head = clean_override or _normalize_visual_text(
+        f"{title}. {subject}" if subject and subject != title else (title or subject)
+    )
 
     prompt = (
         f"{head}. "
-        f"YouTube thumbnail, eye-catching, dramatic lighting, bold contrast, "
-        f"vibrant colours, editorial style, 16:9, no text, no watermark"
+        f"YouTube thumbnail background, eye-catching, dramatic lighting, bold contrast, "
+        f"vibrant colours, editorial style, 16:9, leave clear lower third for text overlay, "
+        f"no text, no letters, no watermark, no logo"
     )
 
-    return generate_scene_image(
+    path = generate_scene_image(
         prompt      = prompt,
         filename    = out_filename,
         width       = 1280,
@@ -642,3 +650,121 @@ def generate_thumbnail(
         symbol      = "thumbnail",
         verify_text = head,
     )
+
+    text = (hook_text or derive_thumbnail_hook(title)).strip()
+    if text and config.THUMBNAIL_TEXT_ENABLED:
+        path = _compose_thumbnail_text(path, text)
+    return path
+
+
+def _load_thumbnail_font(size: int):
+    """Prefer bold system fonts that read on mobile thumbnails."""
+    from PIL import ImageFont
+    candidates = [
+        "C:/Windows/Fonts/arialbd.ttf",
+        "C:/Windows/Fonts/segoeuib.ttf",
+        "C:/Windows/Fonts/impact.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+    return ImageFont.load_default()
+
+
+def _wrap_hook_lines(text: str, font, draw, max_width: int) -> list[str]:
+    words = text.split()
+    if not words:
+        return [text]
+    lines: list[str] = []
+    current = words[0]
+    for word in words[1:]:
+        trial = f"{current} {word}"
+        bbox = draw.textbbox((0, 0), trial, font=font)
+        if bbox[2] - bbox[0] <= max_width:
+            current = trial
+        else:
+            lines.append(current)
+            current = word
+    lines.append(current)
+    return lines[:3]  # hard cap for mobile readability
+
+
+def _compose_thumbnail_text(image_path: str, hook_text: str) -> str:
+    """
+    Overlay high-contrast hook text on the lower third of a thumbnail.
+    Mutates the image in place and returns the same path.
+    """
+    from PIL import Image, ImageDraw, ImageFont, ImageFilter
+
+    hook = re.sub(r"\s+", " ", hook_text).strip().upper()
+    if not hook:
+        return image_path
+
+    try:
+        img = Image.open(image_path).convert("RGBA")
+    except Exception as exc:
+        logger.warning(f"Thumbnail text compose skipped (open failed): {exc}")
+        return image_path
+
+    w, h = img.size
+    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    # Dark gradient bar across the lower ~42% for text legibility
+    bar_top = int(h * 0.55)
+    for y in range(bar_top, h):
+        progress = (y - bar_top) / max(h - bar_top, 1)
+        alpha = int(40 + 170 * progress)
+        draw.line([(0, y), (w, y)], fill=(0, 0, 0, alpha))
+
+    # Fit font to width
+    font_size = max(48, int(h * 0.11))
+    font = _load_thumbnail_font(font_size)
+    max_text_w = int(w * 0.90)
+    lines = _wrap_hook_lines(hook, font, draw, max_text_w)
+    # Shrink if still too wide
+    for _ in range(6):
+        widest = max(
+            (draw.textbbox((0, 0), line, font=font)[2] for line in lines),
+            default=0,
+        )
+        if widest <= max_text_w:
+            break
+        font_size = int(font_size * 0.9)
+        font = _load_thumbnail_font(font_size)
+        lines = _wrap_hook_lines(hook, font, draw, max_text_w)
+
+    line_gap = int(font_size * 0.18)
+    heights = []
+    widths = []
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        widths.append(bbox[2] - bbox[0])
+        heights.append(bbox[3] - bbox[1])
+    block_h = sum(heights) + line_gap * (len(lines) - 1)
+    y = h - block_h - int(h * 0.07)
+
+    # Soft shadow plate behind text
+    for line, lw, lh in zip(lines, widths, heights):
+        x = (w - lw) // 2
+        # Stroke / outline for contrast on any background
+        stroke = max(3, font_size // 18)
+        for dx, dy in (
+            (-stroke, 0), (stroke, 0), (0, -stroke), (0, stroke),
+            (-stroke, -stroke), (stroke, stroke), (-stroke, stroke), (stroke, -stroke),
+        ):
+            draw.text((x + dx, y + dy), line, font=font, fill=(0, 0, 0, 220))
+        draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
+        y += lh + line_gap
+
+    composed = Image.alpha_composite(img, overlay).convert("RGB")
+    # Mild sharpen so text stays crisp after YouTube recompression
+    composed = composed.filter(ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=3))
+    composed.save(image_path, quality=92)
+    logger.info(f"Thumbnail text overlay applied: '{hook}' → {image_path}")
+    return image_path

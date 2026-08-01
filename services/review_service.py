@@ -94,8 +94,11 @@ def extract_score(review_text: str) -> int:
 
 def extract_safety(review_text: str) -> str:
     """Extract 'Yes' or 'No' from 'Safe to publish?' in review text."""
-    match = re.search(r"Safe to publish\?\s*(Yes|No)", review_text)
-    safety = match.group(1) if match else "No"
+    match = re.search(r"Safe to publish\?\s*(Yes|No)", review_text, re.IGNORECASE)
+    if not match:
+        # Tolerate "Safe to publish: Yes" without the question mark
+        match = re.search(r"Safe to publish\s*[:\-]\s*(Yes|No)", review_text, re.IGNORECASE)
+    safety = match.group(1).capitalize() if match else "No"
     logger.info(f"Extracted safety status: {safety}")
     return safety
 

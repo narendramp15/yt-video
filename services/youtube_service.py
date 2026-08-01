@@ -23,10 +23,11 @@ SCOPES = [
 ]
 
 
+# Keep defaults niche-neutral. Never tag "AI generated / AI voice" — that
+# brands uploads as low-trust filler and tanks CTR in browse/search.
 _DEFAULT_TAGS = [
-    "trending topics", "India news", "viral video", "explainer",
-    "educational", "2024", "YouTube India",
-    "AI generated", "AI voice", "AI narration",
+    "trending topics", "India news", "explainer",
+    "educational", "YouTube India",
     config.CHANNEL_NAME or "",
 ]
 
@@ -99,6 +100,7 @@ def upload_video(
     video_path: str = "output/final_video.mp4",
     thumbnail_path: str | None = "output/images/thumbnail.jpg",
     tags: list[str] | None = None,
+    category_id: str | None = None,
 ) -> str:
     """
     Upload video to YouTube.
@@ -111,6 +113,7 @@ def upload_video(
     video_path     : path to the mp4 file
     thumbnail_path : optional path to thumbnail image (JPG/PNG)
     tags           : optional list of tags (falls back to _DEFAULT_TAGS)
+    category_id    : YouTube categoryId (falls back to config.DEFAULT_CATEGORY)
 
     Returns: YouTube video ID string.
     """
@@ -121,15 +124,21 @@ def upload_video(
     youtube = _build_youtube_client()
     logger.info("OAuth authentication successful")
 
+    # Drop any AI-sludge tags if a caller still passes them
+    _BLOCKED_TAGS = {"ai generated", "ai voice", "ai narration", "ai-generated"}
     final_tags = (tags or []) + _DEFAULT_TAGS
-    final_tags = list(dict.fromkeys(t for t in final_tags if t))[:30]
+    final_tags = list(dict.fromkeys(
+        t for t in final_tags
+        if t and t.strip().lower() not in _BLOCKED_TAGS
+    ))[:30]
     description = description + _AI_DISCLOSURE
+    resolved_category = (category_id or config.DEFAULT_CATEGORY or "22").strip()
 
     body = {
         "snippet": {
             "title":       title,
             "description": description,
-            "categoryId":  config.DEFAULT_CATEGORY,
+            "categoryId":  resolved_category,
             "tags":        final_tags,
         },
         "status": {

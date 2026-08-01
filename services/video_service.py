@@ -508,10 +508,13 @@ def create_video(
     stat_cards: list[dict] | None = None,
     scene_images: dict[str, str] | None = None,
     scene_labels: list[str] | None = None,
+    scene_titles: dict[str, str] | None = None,
     topic: str = "",
     angle: str = "",
     voice_path: str | None = None,
     out_path: str = "output/final_video.mp4",
+    enable_chapter_cards: bool | None = None,
+    enable_intro_card: bool | None = None,
 ) -> str:
     """
     Assemble the final YouTube video locally using FFmpeg + MoviePy.
@@ -524,10 +527,13 @@ def create_video(
     scene_images : { symbol: image_path } from image_service (Pollinations.ai)
                    Used as section backgrounds (prioritised over chart PNGs)
     scene_labels : ordered list of scene labels for chapter cards + lower-thirds
+    scene_titles : optional {label: human title} for viewer-facing overlays
     topic        : video topic (used in intro card)
     angle        : content angle/framing (used in intro card subtitle)
     voice_path   : path to the TTS audio file; auto-detected when omitted
     out_path     : destination path for the rendered MP4
+    enable_chapter_cards : full-screen chapter transitions (default: config, off)
+    enable_intro_card    : 2s topic card at t=0 (default: config, off — fights hook)
 
     Returns: path to the rendered video file.
     """
@@ -537,6 +543,13 @@ def create_video(
         voice_path = next((p for p in _voice_files if os.path.exists(p)), None)
     if voice_path is None:
         raise FileNotFoundError("No voice file found — run TTS step first")
+
+    use_chapter_cards = (
+        config.CHAPTER_CARDS_ENABLED if enable_chapter_cards is None else enable_chapter_cards
+    )
+    use_intro_card = (
+        config.INTRO_CARD_ENABLED if enable_intro_card is None else enable_intro_card
+    )
 
     voice    = AudioFileClip(voice_path)
     from moviepy.audio.fx import AudioFadeIn, AudioFadeOut
@@ -558,14 +571,17 @@ def create_video(
         stat_cards   = stat_cards,
     )
 
-    # 3. Scene lower-thirds + chapter cards + intro
+    # 3. Scene lower-thirds + optional chapter cards + optional intro
     sorted_scenes = sorted(timeline.items(), key=lambda x: x[1]) if timeline else []
     chapter_labels = scene_labels or [s for s, _ in sorted_scenes]
     total_ch = max(len(chapter_labels), 1)
+    titles = scene_titles or {}
 
-    if topic and duration > 0:
+    if use_intro_card and topic and duration > 0:
         intro = _make_intro_clip(topic=topic, angle=angle, duration=2.0)
         overlays.append(intro)
+    elif topic:
+        logger.info("Intro card disabled — spoken hook owns the first seconds")
 
     for ch_idx, (label, start_t) in enumerate(sorted_scenes):
         if label in ("intro", "outro", "NIFTY"):
@@ -573,20 +589,24 @@ def create_video(
         end_t    = sorted_scenes[ch_idx + 1][1] if ch_idx + 1 < len(sorted_scenes) else duration
         seg_dur  = max(end_t - start_t, 1.0)
         lt_dur   = min(6.0, seg_dur * 0.35)
+        display  = titles.get(label) or label
 
-        lt = _make_lower_third_clip(label=label, start=start_t, duration=lt_dur)
+        lt = _make_lower_third_clip(label=display, start=start_t, duration=lt_dur)
         overlays.append(lt)
 
-        if ch_idx > 0:
+        if use_chapter_cards and ch_idx > 0:
             card_start = max(start_t - 0.3, 0.0)
             card = _make_chapter_card_clip(
                 chapter_num    = ch_idx,
                 total_chapters = total_ch,
-                label          = label,
+                label          = display,
                 start          = card_start,
                 duration       = 2.5,
             )
             overlays.append(card)
+
+    if not use_chapter_cards:
+        logger.info("Chapter cards disabled — lower-thirds only (retention-safe)")
 
     final_video = (
         CompositeVideoClip([bg] + overlays, size=(_W, _H))

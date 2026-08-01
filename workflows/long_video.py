@@ -40,7 +40,7 @@ from services.script_service import generate_script, strip_scene_markers, Script
 from services.tts_service import generate_voice
 from services.video_service import create_video
 from services.youtube_service import upload_video, post_pinned_comment
-from services.review_service import review_script, extract_score, log_review
+from services.review_service import review_script, extract_score, extract_safety, log_review
 from services.sync_service import transcribe_and_sync
 from services.checkpoint_service import is_done, mark_done, get_step_data
 from services.image_service import generate_scene_images_for_scenes, generate_thumbnail
@@ -48,6 +48,13 @@ from services.tts_memory_service import analyze_and_update
 from services.yt_analytics_memory_service import record_video
 from services.x_service import post_video_update
 from services.cost_service import print_run_summary
+from services.packaging_service import (
+    build_publish_description,
+    decide_privacy,
+    derive_thumbnail_hook,
+    resolve_category_id,
+    scene_titles_from_script,
+)
 from logger import logger
 
 
@@ -183,14 +190,17 @@ def run_long_video(no_upload: bool = False) -> None:
     logger.info(f"Output slug: {_slug}")
     # ── Phase 2 (self-review): AI safety + quality gate ───────────────────
     if is_done("review_script"):
-        score = get_step_data("review_script")["score"]
-        logger.info(f"Review score (from checkpoint): {score}")
+        review_data = get_step_data("review_script")
+        score = review_data["score"]
+        safety = review_data.get("safety") or ("Yes" if score >= 80 else "No")
+        logger.info(f"Review score (from checkpoint): {score}  safety={safety}")
     else:
         review = review_script(script_out.long_script)
         score  = extract_score(review)
+        safety = extract_safety(review)
         log_review(topic, score, review)
-        mark_done("review_script", score=score)
-        logger.info(f"Review score: {score}/100")
+        mark_done("review_script", score=score, safety=safety)
+        logger.info(f"Review score: {score}/100  safety={safety}")
 
     # ── Phase 3a: Edge TTS voiceover ───────────────────────────────────────
     if is_done("generate_voice"):
@@ -249,6 +259,7 @@ def run_long_video(no_upload: bool = False) -> None:
                 title           = script_out.seo_title or topic,
                 topic           = topic,
                 prompt_override = script_out.thumbnail_prompt,
+                hook_text       = derive_thumbnail_hook(script_out.seo_title or topic),
             )
         except Exception as exc:
             logger.warning(f"Thumbnail generation failed (non-fatal): {exc}")
@@ -278,15 +289,19 @@ def run_long_video(no_upload: bool = False) -> None:
         logger.warning(f"TTS memory update failed (non-fatal): {exc}")
 
     # ── Phase 4: Render video (local MoviePy + FFmpeg) ────────────────────
+    scene_label_list = _scene_labels_from_script(script_out.long_script)
+    scene_text_map = _scene_texts_from_script(script_out.long_script)
+    scene_title_map = scene_titles_from_script(scene_label_list, scene_text_map)
+
     if not is_done("create_video"):
         logger.info("Assembling video locally (MoviePy + FFmpeg)...")
-        scene_label_list = _scene_labels_from_script(script_out.long_script)
         create_video(
             timeline     = timeline,
             ticker_items = [],
             stat_cards   = [],
             scene_images = scene_images,
             scene_labels = scene_label_list,
+            scene_titles = scene_title_map,
             topic        = topic,
             angle        = angle,
             voice_path   = voice_path,
@@ -296,23 +311,36 @@ def run_long_video(no_upload: bool = False) -> None:
 
     # ── Phase 5: Upload to YouTube ────────────────────────────────────────
     video_id = None
+    privacy = decide_privacy(score, safety)
     if no_upload:
         logger.info("Skipping upload (--no-upload flag set) — video saved locally only")
     elif is_done("upload_video"):
         logger.info("Video already uploaded — skipping")
         video_id = get_step_data("upload_video").get("video_id")
+        privacy = get_step_data("upload_video").get("privacy", privacy)
     else:
-        privacy = "public" if score >= 80 else "private"
-        logger.info(f"Publishing: {privacy} (score={score}, threshold=80)")
+        logger.info(
+            f"Publishing: {privacy} (score={score}, safety={safety}, "
+            f"threshold=80 + Safe to publish? Yes)"
+        )
 
         tags_str = ", ".join(script_out.seo_tags) if script_out.seo_tags else ""
-        description = (
+        base_description = (
             script_out.seo_description
             or (
                 f"{topic}\n\n"
                 "Educational content. Subscribe for daily trending topic videos.\n\n"
                 f"Tags: {tags_str}"
             )
+        )
+        description = build_publish_description(
+            base_description,
+            timeline=timeline,
+            scene_titles=scene_title_map,
+        )
+        category_id = resolve_category_id(
+            topic=topic,
+            title=script_out.seo_title or topic,
         )
 
         video_id = upload_video(
@@ -322,8 +350,9 @@ def run_long_video(no_upload: bool = False) -> None:
             thumbnail_path = thumbnail_path,
             tags           = script_out.seo_tags or [],
             video_path     = _video_path,
+            category_id    = category_id,
         )
-        mark_done("upload_video", privacy=privacy, video_id=video_id)
+        mark_done("upload_video", privacy=privacy, video_id=video_id, category_id=category_id)
 
         # Post a pinned comment with the topic + angle
         if video_id:
@@ -351,7 +380,7 @@ def run_long_video(no_upload: bool = False) -> None:
                 topic          = topic,
                 angle          = angle,
                 seo_title      = script_out.seo_title or topic,
-                privacy_status = "public" if score >= 80 else "private",
+                privacy_status = privacy,
             )
         except Exception as exc:
             logger.warning(f"Analytics record failed (non-fatal): {exc}")
@@ -361,7 +390,7 @@ def run_long_video(no_upload: bool = False) -> None:
         video_id  = video_id,
         topic     = topic,
         seo_title = script_out.seo_title or topic,
-        privacy   = "public" if score >= 80 else "private",
+        privacy   = privacy,
     )
 
     logger.info("=== yt-video pipeline complete ✓ ===")
