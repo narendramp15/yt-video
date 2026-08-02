@@ -166,6 +166,7 @@ def generate_script(
     topic: str,
     trend_signals: list[str] | None = None,
     angle: str | None = None,
+    format_block: str | None = None,
 ) -> "ScriptOutput":
     """
     Generate a full mega-script in one AI call.
@@ -175,6 +176,7 @@ def generate_script(
     topic          : the primary topic to make a video about
     trend_signals  : related trending signals to weave into the script
     angle          : optional framing suggestion from AI topic filter
+    format_block   : optional Phase C show-format beat sheet
 
     Returns: ScriptOutput with long_script, shorts_script, seo_title,
              seo_description, seo_tags all parsed and ready to use.
@@ -193,6 +195,7 @@ def generate_script(
         logger.info(f"Injecting {len(top)} trend signals into prompt")
 
     angle_block = f"\nSUGGESTED ANGLE: {angle}\n" if angle else ""
+    show_format_block = f"\n{format_block}\n" if format_block else ""
 
     # Inject learned TTS style notes from previous runs (empty on first run)
     try:
@@ -213,11 +216,18 @@ def generate_script(
     if analytics_block:
         logger.info("Injecting YouTube Analytics performance notes into prompt")
 
+    niche_block = ""
+    try:
+        from services.topic_service import niche_lock_prompt_note
+        niche_block = niche_lock_prompt_note()
+    except Exception:
+        pass
+
     prompt = f"""You are a YouTube creator who scripts the way people actually talk on camera —
 curious, specific, and a little imperfect. Never sound like a corporate AI explainer.
 
 VIDEO TOPIC: {topic}
-{angle_block}{trend_block}
+{angle_block}{trend_block}{show_format_block}{niche_block}
 CHANNEL STYLE: A sharp friend walking you through something interesting. Warm, direct, lightly witty.
 Avoid polished brochure tone. Prefer concrete details over abstract hype.
 TARGET AUDIENCE: India, 18–35, English-speaking, interested in trending real-world topics.

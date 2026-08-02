@@ -42,21 +42,30 @@ from services.topic_service import fetch_trending_topics, filter_and_score_topic
 from services.script_service import generate_script, strip_scene_markers, ScriptOutput, refine_scene_prompts
 from services.tts_service import generate_voice
 from services.video_service import create_video, create_shorts_video
-from services.youtube_service import upload_video, post_pinned_comment
+from services.youtube_service import (
+    upload_video,
+    post_pinned_comment,
+    ensure_playlist,
+    add_video_to_playlist,
+    build_up_next_blurb,
+)
 from services.review_service import review_script, extract_score, extract_safety, log_review
 from services.sync_service import transcribe_and_sync, load_caption_cues, words_to_srt, transcribe_words
 from services.checkpoint_service import is_done, mark_done, get_step_data
 from services.image_service import generate_scene_images_for_scenes, generate_thumbnail
 from services.tts_memory_service import analyze_and_update
-from services.yt_analytics_memory_service import record_video
+from services.yt_analytics_memory_service import record_video, recent_public_video_ids
 from services.x_service import post_video_update
 from services.cost_service import print_run_summary
+from services.format_service import pick_format, format_prompt_block, get_format
 from services.packaging_service import (
     build_publish_description,
     decide_privacy,
     derive_thumbnail_hook,
     generate_packaging_variants,
     pick_best_packaging,
+    write_packaging_pending,
+    packaging_gate_status,
     resolve_category_id,
     scene_titles_from_script,
 )
@@ -167,6 +176,21 @@ def run_long_video(no_upload: bool = False) -> None:
     angle = top.get("angle", "") or get_content_angle(top["title"])
     logger.info(f"Selected topic: '{topic}'  angle: '{angle}'")
 
+    # ── Phase 1c: Format library pick (Phase C) ───────────────────────────
+    if is_done("pick_format"):
+        format_id = get_step_data("pick_format").get("format_id", "trend_vs_reality")
+        format_spec = get_format(format_id)
+        logger.info(f"Format (from checkpoint): {format_spec.id}")
+    else:
+        format_spec = pick_format(topic, angle=angle)
+        format_id = format_spec.id
+        mark_done(
+            "pick_format",
+            format_id=format_id,
+            format_name=format_spec.name,
+            playlist_title=format_spec.playlist_title,
+        )
+
     # ── Phase 2: Mega-script (long + shorts + SEO) — ONE AI call ──────────
     if is_done("generate_script"):
         logger.info("Loading script output from checkpoint...")
@@ -179,8 +203,9 @@ def run_long_video(no_upload: bool = False) -> None:
             topic         = topic,
             trend_signals = supporting,
             angle         = angle,
+            format_block  = format_prompt_block(format_spec),
         )
-        mark_done("generate_script", **script_out.to_dict())
+        mark_done("generate_script", **script_out.to_dict(), format_id=format_id)
 
     logger.info(f"Long script: {len(script_out.long_script):,} chars")
     logger.info(f"Shorts:      {len(script_out.shorts_script):,} chars")
@@ -229,6 +254,25 @@ def run_long_video(no_upload: bool = False) -> None:
     _srt_path        = f"output/{_slug}.srt"
     _shorts_srt      = f"output/{_slug}_shorts.srt"
     logger.info(f"Output slug: {_slug}")
+
+    # Phase C: write packaging pending early so CLI can approve during render.
+    # Do not clobber an already-approved gate on resume.
+    if config.PACKAGING_REQUIRE_APPROVAL:
+        from services.packaging_service import load_packaging_pending
+        existing_pending = load_packaging_pending() or {}
+        already_approved = (
+            existing_pending.get("approved")
+            and existing_pending.get("topic") == topic
+        )
+        if not already_approved:
+            write_packaging_pending(
+                topic=topic,
+                angle=angle,
+                variants=packaging_variants,
+                winner=packaging_winner,
+                slug=_slug,
+                format_id=format_id,
+            )
 
     # ── Phase 2 (self-review): AI safety + quality gate ───────────────────
     if is_done("review_script"):
@@ -420,6 +464,58 @@ def run_long_video(no_upload: bool = False) -> None:
         video_id = get_step_data("upload_video").get("video_id")
         privacy = get_step_data("upload_video").get("privacy", privacy)
     else:
+        # Phase C packaging gate — public uploads only
+        gate = packaging_gate_status()
+        if (
+            gate["requires_gate"]
+            and privacy == "public"
+            and not no_upload
+        ):
+            if not gate["approved"]:
+                write_packaging_pending(
+                    topic=topic,
+                    angle=angle,
+                    variants=packaging_variants,
+                    winner=packaging_winner,
+                    slug=_slug,
+                    format_id=format_id,
+                )
+                mark_done(
+                    "packaging_pending",
+                    waiting=True,
+                    path=config.PACKAGING_PENDING_PATH,
+                )
+                logger.warning(
+                    "PACKAGING GATE: public upload paused. Review variants then run:\n"
+                    "  python main.py --approve-packaging [--variant N]\n"
+                    "  python main.py --reject-packaging   # force private\n"
+                    "Then re-run: python main.py"
+                )
+                print_run_summary("yt_video")
+                return
+
+            if gate["force_private"]:
+                privacy = "private"
+                logger.info("Packaging rejected — forcing privacy=private")
+            else:
+                chosen = gate["chosen"] or packaging_winner
+                prev_title, prev_hook = publish_title, thumb_hook
+                publish_title = (chosen.get("title") or publish_title).strip()
+                thumb_hook = (chosen.get("hook") or thumb_hook).strip()
+                packaging_variant_id = chosen.get("variant_id") or packaging_variant_id
+                packaging_winner = chosen
+                if publish_title != prev_title or thumb_hook != prev_hook:
+                    try:
+                        thumbnail_path = generate_thumbnail(
+                            title=publish_title,
+                            topic=topic,
+                            prompt_override=script_out.thumbnail_prompt,
+                            hook_text=thumb_hook,
+                        )
+                        logger.info("Thumbnail regenerated after packaging approval")
+                    except Exception as exc:
+                        logger.warning(f"Thumb regen after approval failed (non-fatal): {exc}")
+
         logger.info(
             f"Publishing: {privacy} (score={score}, safety={safety}, "
             f"threshold=80 + Safe to publish? Yes)"
@@ -434,6 +530,10 @@ def run_long_video(no_upload: bool = False) -> None:
                 f"Tags: {tags_str}"
             )
         )
+        up_next_ids = recent_public_video_ids(limit=3)
+        up_next = build_up_next_blurb(up_next_ids)
+        if up_next:
+            base_description = f"{base_description.rstrip()}\n\n{up_next}"
         description = build_publish_description(
             base_description,
             timeline=timeline,
@@ -461,7 +561,21 @@ def run_long_video(no_upload: bool = False) -> None:
                 f"{angle + ' — ' if angle else ''}"
                 f"Let us know your thoughts in the comments! 👇"
             )
+            if up_next:
+                comment = f"{comment}\n\n{up_next}"
             post_pinned_comment(video_id, comment)
+
+            # Phase C: add long video to format playlist (skip Shorts)
+            try:
+                playlist_id = ensure_playlist(
+                    format_spec.playlist_title,
+                    description=f"Series: {format_spec.name}",
+                )
+                if playlist_id:
+                    add_video_to_playlist(playlist_id, video_id)
+            except Exception as exc:
+                logger.warning(f"Playlist add failed (non-fatal): {exc}")
+
             post_video_update(
                 title=publish_title,
                 video_id=video_id,
@@ -522,6 +636,7 @@ def run_long_video(no_upload: bool = False) -> None:
                 thumb_hook     = thumb_hook,
                 packaging_variant_id = packaging_variant_id,
                 is_short       = False,
+                format_id      = format_id,
             )
         except Exception as exc:
             logger.warning(f"Analytics record failed (non-fatal): {exc}")
@@ -538,6 +653,7 @@ def run_long_video(no_upload: bool = False) -> None:
                 thumb_hook     = thumb_hook,
                 packaging_variant_id = packaging_variant_id,
                 is_short       = True,
+                format_id      = format_id,
             )
         except Exception as exc:
             logger.warning(f"Shorts analytics record failed (non-fatal): {exc}")

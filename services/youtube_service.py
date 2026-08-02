@@ -219,3 +219,122 @@ def post_pinned_comment(video_id: str, text: str) -> None:
         logger.info(f"Pinned comment posted ✓  (comment_id={comment_id})")
     except Exception as exc:
         logger.warning(f"post_pinned_comment failed (non-fatal): {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Phase C — playlists + session routing
+# ---------------------------------------------------------------------------
+
+def _load_playlist_cache() -> dict:
+    import json
+    from pathlib import Path
+
+    path = Path(config.PLAYLISTS_STATE_PATH)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_playlist_cache(cache: dict) -> None:
+    import json
+    from pathlib import Path
+
+    path = Path(config.PLAYLISTS_STATE_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(cache, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def ensure_playlist(title: str, description: str = "") -> str | None:
+    """
+    Create-once playlist by title; cache id in state/playlists.json.
+    Returns playlist_id or None on failure.
+    """
+    title = (title or "").strip()
+    if not title:
+        return None
+
+    cache = _load_playlist_cache()
+    cached = cache.get(title)
+    if cached:
+        return cached
+
+    try:
+        youtube = _build_youtube_client()
+        # Search existing playlists first
+        page_token = None
+        while True:
+            resp = youtube.playlists().list(
+                part="snippet",
+                mine=True,
+                maxResults=50,
+                pageToken=page_token,
+            ).execute()
+            for item in resp.get("items", []) or []:
+                if (item.get("snippet") or {}).get("title") == title:
+                    pid = item["id"]
+                    cache[title] = pid
+                    _save_playlist_cache(cache)
+                    logger.info(f"Playlist found: '{title}' → {pid}")
+                    return pid
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+
+        body = {
+            "snippet": {
+                "title": title,
+                "description": description or f"Auto playlist for {title}",
+            },
+            "status": {"privacyStatus": "public"},
+        }
+        created = youtube.playlists().insert(part="snippet,status", body=body).execute()
+        pid = created.get("id")
+        if pid:
+            cache[title] = pid
+            _save_playlist_cache(cache)
+            logger.info(f"Playlist created: '{title}' → {pid}")
+        return pid
+    except Exception as exc:
+        logger.warning(f"ensure_playlist failed (non-fatal): {exc}")
+        return None
+
+
+def add_video_to_playlist(playlist_id: str, video_id: str) -> bool:
+    """Add video to playlist. Non-fatal. Returns True on success."""
+    if not playlist_id or not video_id:
+        return False
+    try:
+        youtube = _build_youtube_client()
+        youtube.playlistItems().insert(
+            part="snippet",
+            body={
+                "snippet": {
+                    "playlistId": playlist_id,
+                    "resourceId": {
+                        "kind": "youtube#video",
+                        "videoId": video_id,
+                    },
+                }
+            },
+        ).execute()
+        logger.info(f"Added {video_id} to playlist {playlist_id}")
+        return True
+    except Exception as exc:
+        logger.warning(f"add_video_to_playlist failed (non-fatal): {exc}")
+        return False
+
+
+def build_up_next_blurb(recent_video_ids: list[str] | None = None) -> str:
+    """
+    Description / pinned-comment blurb linking recent videos as 'Watch next'.
+    """
+    ids = [v for v in (recent_video_ids or []) if v]
+    if not ids:
+        return ""
+    lines = ["Watch next:"]
+    for i, vid in enumerate(ids[:3], 1):
+        lines.append(f"{i}. https://www.youtube.com/watch?v={vid}")
+    return "\n".join(lines)

@@ -96,6 +96,7 @@ def record_video(
     thumb_hook: str | None = None,
     packaging_variant_id: str | None = None,
     is_short: bool = False,
+    format_id: str | None = None,
 ) -> None:
     """
     Store uploaded video metadata so analytics can be fetched later.
@@ -110,6 +111,7 @@ def record_video(
     upload_date    : ISO date string (defaults to today)
     title / thumb_hook / packaging_variant_id : packaging A/B metadata
     is_short       : True when this was a Shorts upload
+    format_id      : Phase C show-format id
     """
     if not video_id:
         logger.warning("yt_analytics: no video_id provided — skipping record_video()")
@@ -132,6 +134,7 @@ def record_video(
         "title":           title or seo_title,
         "thumb_hook":      thumb_hook or "",
         "packaging_variant_id": packaging_variant_id or "",
+        "format_id":       format_id or "",
         "is_short":        bool(is_short),
         "privacy_status":  privacy_status,
         "upload_date":     upload_date,
@@ -146,6 +149,24 @@ def record_video(
         f"analytics fetchable after {_FETCH_DELAY_H}h "
         f"(run: python main.py --fetch-analytics)"
     )
+
+
+def recent_public_video_ids(limit: int = 3, exclude: str | None = None) -> list[str]:
+    """Recent non-short public video ids for Up-next blurbs."""
+    mem = _load()
+    out: list[str] = []
+    for v in reversed(mem.get("videos", [])):
+        if v.get("is_short"):
+            continue
+        if (v.get("privacy_status") or "").lower() != "public":
+            continue
+        vid = v.get("video_id") or ""
+        if not vid or vid == exclude:
+            continue
+        out.append(vid)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def recent_video_topics(limit: int = 40) -> list[str]:
@@ -336,7 +357,108 @@ def _fetch_one(credentials, video_id: str, upload_date: str) -> dict:
         logger.debug(f"Traffic sources unavailable for {video_id}: {exc}")
         data["traffic_sources"] = {}
 
+    # Audience retention curve (best-effort) — Phase C
+    data["retention_curve_available"] = False
+    data["retention_curve"] = []
+    data["retention_weak_bands"] = []
+    try:
+        curve_resp = service.reports().query(
+            ids="channel==MINE",
+            startDate=start,
+            endDate=end,
+            metrics="audienceRetention",
+            dimensions="elapsedVideoTimeRatio",
+            filters=f"video=={video_id}",
+        ).execute()
+        curve: list[dict] = []
+        for row in curve_resp.get("rows", []) or []:
+            if len(row) >= 2:
+                curve.append({
+                    "elapsed_ratio": float(row[0]),
+                    "retention": float(row[1]),
+                })
+        if curve:
+            curve.sort(key=lambda p: p["elapsed_ratio"])
+            data["retention_curve"] = curve
+            data["retention_curve_available"] = True
+            data["retention_weak_bands"] = detect_weak_retention_bands(curve)
+            data["retention_curve_summary"] = summarize_retention_curve(
+                curve, data["retention_weak_bands"]
+            )
+    except Exception as exc:
+        logger.debug(f"Retention curve unavailable for {video_id}: {exc}")
+
     return data
+
+
+def detect_weak_retention_bands(
+    curve: list[dict],
+    drop_pts: float = 15.0,
+    window: float = 0.10,
+) -> list[dict]:
+    """
+    Detect segments where relative retention drops > drop_pts across ~window
+    of elapsed video time ratio (0–1).
+    """
+    if len(curve) < 2:
+        return []
+    points = sorted(curve, key=lambda p: float(p.get("elapsed_ratio") or 0))
+    weak: list[dict] = []
+    i = 0
+    while i < len(points):
+        start_r = float(points[i]["elapsed_ratio"])
+        start_ret = float(points[i]["retention"])
+        j = i + 1
+        while j < len(points) and float(points[j]["elapsed_ratio"]) - start_r < window:
+            j += 1
+        if j >= len(points):
+            break
+        end_r = float(points[j]["elapsed_ratio"])
+        end_ret = float(points[j]["retention"])
+        drop = start_ret - end_ret
+        if drop >= drop_pts:
+            mid = (start_r + end_r) / 2.0
+            weak.append({
+                "start_ratio": round(start_r, 3),
+                "end_ratio": round(end_r, 3),
+                "mid_ratio": round(mid, 3),
+                "drop_pts": round(drop, 1),
+                "note": _weak_band_script_note(mid, drop),
+            })
+            i = j
+        else:
+            i += 1
+    return weak
+
+
+def _weak_band_script_note(mid_ratio: float, drop_pts: float) -> str:
+    pct = int(round(mid_ratio * 100))
+    if mid_ratio < 0.25:
+        where = "early (first quarter)"
+        tip = "tighten the cold open and plant an open loop in the first 20 seconds"
+    elif mid_ratio < 0.55:
+        where = "around mid-video"
+        tip = "add a pattern interrupt / open loop before the midpoint"
+    else:
+        where = "late (final third)"
+        tip = "tease a concrete payoff earlier and keep the late CTA short"
+    return (
+        f"Viewers drop {drop_pts:.0f}pts {where} (~{pct}% mark) — {tip}."
+    )
+
+
+def summarize_retention_curve(curve: list[dict], weak_bands: list[dict] | None = None) -> dict:
+    if not curve:
+        return {"available": False}
+    rets = [float(p.get("retention") or 0) for p in curve]
+    return {
+        "available": True,
+        "points": len(curve),
+        "start_retention": round(rets[0], 1) if rets else 0,
+        "end_retention": round(rets[-1], 1) if rets else 0,
+        "min_retention": round(min(rets), 1) if rets else 0,
+        "weak_band_count": len(weak_bands or []),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -556,6 +678,22 @@ def _derive_script_notes(analyzed: list[dict], summary: dict) -> list[str]:
             "No subscribers gained yet. End the video with a specific reason to subscribe "
             "(e.g. 'We cover one trending topic like this every week — subscribe so you never miss it.')."
         )
+
+    # Phase C — weak retention band notes from audience retention curves
+    band_notes: list[str] = []
+    for v in analyzed:
+        analytics = v.get("analytics") or {}
+        if not analytics.get("retention_curve_available"):
+            continue
+        for band in analytics.get("retention_weak_bands") or []:
+            note = (band.get("note") or "").strip()
+            if note and note not in band_notes:
+                band_notes.append(note)
+    for note in band_notes[:4]:
+        notes.append(note)
+    if not any((v.get("analytics") or {}).get("retention_curve_available") for v in analyzed):
+        # Keep silent when no curves yet — avoid noisy false guidance
+        pass
 
     return notes
 
