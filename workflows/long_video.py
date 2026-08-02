@@ -297,8 +297,9 @@ def run_long_video(no_upload: bool = False) -> None:
         logger.info("Assembling video locally (MoviePy + FFmpeg)...")
         create_video(
             timeline     = timeline,
-            ticker_items = [],
-            stat_cards   = [],
+            # Finance chrome stays off for this general-topic pipeline
+            ticker_items = None,
+            stat_cards   = None,
             scene_images = scene_images,
             scene_labels = scene_label_list,
             scene_titles = scene_title_map,
@@ -369,7 +370,7 @@ def run_long_video(no_upload: bool = False) -> None:
                 angle=angle,
                 privacy_status=privacy,
                 pipeline="yt_video",
-                hashtags="#StockMarket #Trading #Investing #Finance #NSE #NIFTY50",
+                hashtags="#Trending #India #Explained #YouTube",
             )
 
     # ── Record upload for 48h analytics fetch ─────────────────────────────

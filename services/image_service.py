@@ -464,8 +464,8 @@ def generate_scene_images_for_movers(
         # Subject first — diffusion models weight early tokens most.
         prompt = (
             f"{subject}. "
-            f"Financial data visualization aesthetic, dark blue gradient background, "
-            f"editorial photography style, cinematic lighting, 16:9, no text, no watermark"
+            f"photorealistic financial news photo, natural lighting, real world scene, "
+            f"documentary photography, 16:9, no text, no watermark"
         )
 
         try:
@@ -532,15 +532,15 @@ def generate_scene_images_for_scenes(
 
     Returns: {label: image_path}
     """
-    # Position-based visual style descriptors
+    # Position-based visual style descriptors — documentary / photo-real, not AI-art
     _POSITION_STYLES = [
-        "dramatic opening shot, wide establishing scene, cinematic reveal",
-        "close-up detail view, focused subject, vivid colours",
-        "wide angle perspective, environmental context, depth of field",
-        "dynamic action shot, energy and movement, high contrast",
-        "mid-shot portrait style, clarity and detail, warm tones",
-        "aerial overview, grand scale, sweeping landscape",
-        "artistic conclusion shot, reflective mood, soft lighting",
+        "wide establishing photo, natural daylight, documentary look",
+        "close-up detail, shallow depth of field, real photograph",
+        "environmental mid-shot, natural light, candid documentary photo",
+        "action moment captured in-camera, high shutter, real-world scene",
+        "portrait framing, soft natural light, photojournalism style",
+        "elevated overview, real location, documentary photography",
+        "quiet closing frame, soft ambient light, authentic photograph",
     ]
 
     context = f"{topic}" + (f" — {angle}" if angle else "")
@@ -566,21 +566,16 @@ def generate_scene_images_for_scenes(
         else:
             subject = context
 
+        photo_tail = (
+            f"{style}, photorealistic, natural lighting, real photograph, "
+            f"16:9, no text, no watermark, no CGI, no illustration"
+        )
         if label == "intro":
-            tail = (
-                f"{style}, bold and attention-grabbing opening shot, "
-                f"editorial photography, dark background, 16:9, no text, no watermark"
-            )
+            tail = f"opening frame, {photo_tail}"
         elif label == "outro":
-            tail = (
-                f"Concluding shot, reflective mood, {style}, "
-                f"editorial photography, dark background, 16:9, no text, no watermark"
-            )
+            tail = f"closing frame, reflective mood, {photo_tail}"
         else:
-            tail = (
-                f"{style}, editorial photography, dark background, 16:9, "
-                f"no text, no watermark"
-            )
+            tail = photo_tail
 
         prompt = f"{subject}. {tail}"
 
@@ -636,9 +631,9 @@ def generate_thumbnail(
 
     prompt = (
         f"{head}. "
-        f"YouTube thumbnail background, eye-catching, dramatic lighting, bold contrast, "
-        f"vibrant colours, editorial style, 16:9, leave clear lower third for text overlay, "
-        f"no text, no letters, no watermark, no logo"
+        f"YouTube thumbnail background, photorealistic, natural lighting, strong contrast, "
+        f"real photograph, documentary style, 16:9, leave clear lower third for text overlay, "
+        f"no text, no letters, no watermark, no logo, no CGI illustration"
     )
 
     path = generate_scene_image(

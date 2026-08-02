@@ -101,6 +101,10 @@ def _clean_for_tts(text: str) -> str:
         pass
     for k, v in replacements.items():
         text = text.replace(k, v)
+    # Em-dashes / en-dashes → comma pause (stock TTS often stumbles on them)
+    text = text.replace("—", ", ").replace("–", ", ")
+    # Ellipsis → short spoken pause cue
+    text = text.replace("...", ".")
     # Strip remaining non-ASCII symbols
     text = re.sub(r"[^\x00-\x7F₹]+", " ", text)
     # Collapse extra whitespace
@@ -130,7 +134,28 @@ def _chunk_text(text: str, max_chars: int = _OPENAI_TTS_LIMIT) -> list[str]:
 # ---------------------------------------------------------------------------
 # Provider 1 — Microsoft Edge TTS  (FREE, primary)
 # ---------------------------------------------------------------------------
-async def _edge_tts_async(text: str, voice: str, out_path: str) -> None:
+def _normalize_prosody(value: str, unit: str) -> str:
+    """
+    Normalize Edge TTS rate/pitch/volume strings.
+    Accepts bare numbers ("-8", "+1") or already-suffixed values ("-8%", "+1Hz").
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return f"+0{unit}"
+    if raw[-1].isdigit():
+        if not raw.startswith(("+", "-")):
+            raw = f"+{raw}"
+        return f"{raw}{unit}"
+    return raw
+
+
+async def _edge_tts_async(
+    text: str,
+    voice: str,
+    out_path: str,
+    rate: str = "+0%",
+    pitch: str = "+0Hz",
+) -> None:
     """
     Async helper — Edge TTS is async-native.
     Uses edge_tts.Communicate which streams the audio directly to file.
@@ -142,7 +167,7 @@ async def _edge_tts_async(text: str, voice: str, out_path: str) -> None:
             "edge-tts not installed. Run: pip install edge-tts"
         )
 
-    communicate = edge_tts.Communicate(text, voice)
+    communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
     await communicate.save(out_path)
 
 
@@ -156,12 +181,17 @@ def _generate_voice_edge(script: str, out_path: str = "output/voice.mp3") -> str
       en-US-AriaNeural     — female, US English, very natural
       en-GB-SoniaNeural    — female, British English
 
+    Prosody (EDGE_TTS_RATE / EDGE_TTS_PITCH) slightly slows and warms the
+    default voice so it reads less like stock robotic TTS.
+
     Returns: path to the generated MP3 file.
     """
     voice = config.EDGE_TTS_VOICE
+    rate  = _normalize_prosody(config.EDGE_TTS_RATE, "%")
+    pitch = _normalize_prosody(config.EDGE_TTS_PITCH, "Hz")
     os.makedirs("output", exist_ok=True)
 
-    logger.info(f"Edge TTS: generating voice (voice='{voice}')...")
+    logger.info(f"Edge TTS: generating voice (voice='{voice}', rate={rate}, pitch={pitch})...")
 
     # Edge TTS has a ~3000-char soft limit per request; chunk long scripts
     script_clean = _clean_for_tts(script)
@@ -169,13 +199,13 @@ def _generate_voice_edge(script: str, out_path: str = "output/voice.mp3") -> str
     logger.info(f"Edge TTS: {len(chunks)} chunk(s) to synthesise")
 
     if len(chunks) == 1:
-        asyncio.run(_edge_tts_async(script_clean, voice, out_path))
+        asyncio.run(_edge_tts_async(script_clean, voice, out_path, rate=rate, pitch=pitch))
     else:
         # Synthesise each chunk to a temp file, then concatenate with pydub
         temp_files: list[str] = []
         for i, chunk in enumerate(chunks):
             tmp = f"output/_edge_chunk_{i}.mp3"
-            asyncio.run(_edge_tts_async(chunk, voice, tmp))
+            asyncio.run(_edge_tts_async(chunk, voice, tmp, rate=rate, pitch=pitch))
             temp_files.append(tmp)
 
         try:
