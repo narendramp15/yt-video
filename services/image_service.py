@@ -64,6 +64,17 @@ def _cache_path_for(prompt: str, seed: int, model: str, width: int, height: int)
     return os.path.join(_CACHE_DIR, f"{digest}.jpg")
 
 
+def _stable_seed(text: str, modulus: int) -> int:
+    """
+    Deterministic seed from text. Prefer this over Python's hash(), which is
+    randomized per process and breaks image-cache reproducibility.
+    """
+    if modulus <= 0:
+        raise ValueError("modulus must be positive")
+    digest = hashlib.sha1((text or "").encode("utf-8")).hexdigest()
+    return int(digest[:8], 16) % modulus
+
+
 def _validate_image(data: bytes, expected_w: int, expected_h: int) -> tuple[bool, str]:
     """Reject corrupt, undersized, or near-uniform (blank/black) images."""
     if len(data) < _MIN_VALID_BYTES:
@@ -580,7 +591,7 @@ def generate_scene_images_for_scenes(
         prompt = f"{subject}. {tail}"
 
         # Unique seed per scene so images are visually distinct
-        seed = (i + 1) * 7 + abs(hash(label + topic)) % 1000
+        seed = (i + 1) * 7 + _stable_seed(f"{label}:{topic}", 1000)
 
         try:
             path = generate_scene_image(
@@ -641,7 +652,7 @@ def generate_thumbnail(
         filename    = out_filename,
         width       = 1280,
         height      = 720,
-        seed        = abs(hash(title)) % 9999,   # unique per title
+        seed        = _stable_seed(title, 9999),   # unique + reproducible per title
         symbol      = "thumbnail",
         verify_text = head,
     )

@@ -127,10 +127,18 @@ def upload_video(
     # Drop any AI-sludge tags if a caller still passes them
     _BLOCKED_TAGS = {"ai generated", "ai voice", "ai narration", "ai-generated"}
     final_tags = (tags or []) + _DEFAULT_TAGS
-    final_tags = list(dict.fromkeys(
-        t for t in final_tags
-        if t and t.strip().lower() not in _BLOCKED_TAGS
-    ))[:30]
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw in final_tags:
+        tag = (raw or "").strip()
+        if not tag:
+            continue
+        key = tag.lower()
+        if key in _BLOCKED_TAGS or key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(tag)
+    final_tags = cleaned[:30]
     description = description + _AI_DISCLOSURE
     resolved_category = (category_id or config.DEFAULT_CATEGORY or "22").strip()
 

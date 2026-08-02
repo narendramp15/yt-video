@@ -127,11 +127,24 @@ def resolve_category_id(
     """
     haystack = f"{topic} {title}".lower()
     for category_id, keywords in _CATEGORY_RULES:
-        if any(kw in haystack for kw in keywords):
+        if any(_keyword_matches(haystack, kw) for kw in keywords):
             logger.info(f"Category mapped -> {category_id} (topic match)")
             return category_id
     logger.info(f"Category fallback -> {default}")
     return default or "22"
+
+
+def _keyword_matches(haystack: str, keyword: str) -> bool:
+    """
+    Match keywords without false positives like "ai" inside "daily".
+    Multi-word phrases stay substring matches; single tokens use word boundaries.
+    """
+    kw = (keyword or "").strip().lower()
+    if not kw:
+        return False
+    if " " in kw:
+        return kw in haystack
+    return re.search(rf"\b{re.escape(kw)}\b", haystack) is not None
 
 
 def decide_privacy(score: int, safety: str, threshold: int = 80) -> str:

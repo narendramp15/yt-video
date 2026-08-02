@@ -192,7 +192,7 @@ def run_long_video(no_upload: bool = False) -> None:
     if is_done("review_script"):
         review_data = get_step_data("review_script")
         score = review_data["score"]
-        safety = review_data.get("safety") or ("Yes" if score >= 80 else "No")
+        safety = review_data.get("safety") or "No"
         logger.info(f"Review score (from checkpoint): {score}  safety={safety}")
     else:
         review = review_script(script_out.long_script)

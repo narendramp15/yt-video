@@ -49,6 +49,8 @@ def test_category_and_privacy():
     assert resolve_category_id("ChatGPT launches new AI agent", "OpenAI news") == "28"
     assert resolve_category_id("IPL final preview", "Cricket") == "17"
     assert resolve_category_id("Random lifestyle vlog", "My day") == "22"
+    # Substring "ai" must not match inside unrelated words like "daily"
+    assert resolve_category_id("My daily routine vlog", "Said nothing special") == "22"
     assert decide_privacy(85, "Yes") == "public"
     assert decide_privacy(85, "No") == "private"
     assert decide_privacy(70, "Yes") == "private"
