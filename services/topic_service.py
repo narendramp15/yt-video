@@ -373,12 +373,116 @@ def fetch_trending_topics() -> list[str]:
 # ---------------------------------------------------------------------------
 # AI topic filter & scorer
 # ---------------------------------------------------------------------------
+
+def _tokenize(text: str) -> set[str]:
+    import re
+    stop = {
+        "this", "that", "with", "from", "about", "what", "will", "have",
+        "your", "their", "when", "which", "into", "over", "after", "before",
+        "today", "week", "india", "indian", "video", "news",
+    }
+    return {
+        w for w in re.findall(r"[a-z0-9]{3,}", (text or "").lower())
+        if w not in stop
+    }
+
+
+def _recent_topic_titles() -> list[str]:
+    """Titles/topics already posted — used for novelty penalty."""
+    titles: list[str] = []
+    try:
+        from services.yt_analytics_memory_service import recent_video_topics
+        titles.extend(recent_video_topics(limit=40))
+    except Exception:
+        pass
+    return titles
+
+
+def _niche_keywords() -> list[str]:
+    from config import config
+    niche = list(config.CHANNEL_PRIMARY_NICHE or [])
+    if niche:
+        return niche
+    try:
+        from services.yt_analytics_memory_service import get_top_topic_keywords
+        return get_top_topic_keywords(limit=8)
+    except Exception:
+        return []
+
+
+def rerank_topics(
+    ranked: list[dict],
+    raw_signals: list[str] | None = None,
+    recent_topics: list[str] | None = None,
+    top_n: int = 3,
+) -> list[dict]:
+    """
+    Blend LLM score with deterministic novelty / velocity / niche adjustments.
+    """
+    if not ranked:
+        return []
+
+    signals = raw_signals or []
+    recent = recent_topics if recent_topics is not None else _recent_topic_titles()
+    recent_tokens = [_tokenize(t) for t in recent if t]
+    niche = set(_niche_keywords())
+
+    adjusted: list[dict] = []
+    for item in ranked:
+        title = str(item.get("title") or "")
+        tokens = _tokenize(title + " " + str(item.get("angle") or ""))
+        base = float(item.get("score") or 0.0)
+        delta = 0.0
+
+        # Novelty: penalize overlap with recently posted topics
+        if recent_tokens and tokens:
+            best_overlap = max(
+                (len(tokens & rt) / max(len(tokens), 1) for rt in recent_tokens),
+                default=0.0,
+            )
+            if best_overlap >= 0.5:
+                delta -= 2.5
+            elif best_overlap >= 0.3:
+                delta -= 1.25
+
+        # Velocity: bonus if topic tokens appear across multiple raw signals
+        if signals and tokens:
+            hits = sum(
+                1 for s in signals
+                if tokens & _tokenize(s)
+            )
+            if hits >= 3:
+                delta += 1.5
+            elif hits >= 2:
+                delta += 0.75
+
+        # Niche fit
+        if niche and tokens & niche:
+            delta += 1.25
+
+        row = dict(item)
+        row["llm_score"] = base
+        row["score"] = round(base + delta, 2)
+        row["rerank_delta"] = round(delta, 2)
+        adjusted.append(row)
+
+    adjusted.sort(key=lambda x: float(x.get("score") or 0), reverse=True)
+    out = adjusted[:top_n]
+    if out:
+        logger.info(
+            f"Topic re-rank: top='{out[0].get('title')}' "
+            f"score={out[0].get('score')} (delta={out[0].get('rerank_delta')})"
+        )
+    return out
+
+
 def filter_and_score_topics(
     raw_topics: list[str],
     top_n: int = 3,
 ) -> list[dict]:
     """
-    Use AI to filter sensitive topics and score the rest by virality potential.
+    Use AI to filter sensitive topics and score the rest by virality potential,
+    then apply deterministic novelty/velocity/niche re-ranking.
 
     Returns a list of up to top_n dicts:
       [{"title": "...", "angle": "...", "audience": "...", "score": 9.2}, ...]
@@ -388,6 +492,7 @@ def filter_and_score_topics(
     if not raw_topics:
         return []
 
+    ranked: list[dict] = []
     try:
         from openai import OpenAI
         from config import config
@@ -401,6 +506,8 @@ def filter_and_score_topics(
         else:
             client = OpenAI(api_key=config.OPENAI_API_KEY)
 
+        # Ask LLM for a wider pool so re-rank has room to reshuffle
+        pool_n = min(max(top_n * 3, top_n), 12)
         numbered = "\n".join(f"{i+1}. {t}" for i, t in enumerate(raw_topics[:30]))
 
         # Inject channel analytics insights so AI scores toward proven performers
@@ -416,7 +523,7 @@ def filter_and_score_topics(
 Given these {min(len(raw_topics), 30)} trending topics, do the following:
 1. FILTER OUT anything political, controversial, religious, or potentially sensitive.
 2. SCORE the remaining topics 1–10 by YouTube virality potential for India.
-3. Return the top {top_n} topics as a JSON array.
+3. Return the top {pool_n} topics as a JSON array.
 {analytics_block}
 Topics:
 {numbered}
@@ -442,17 +549,18 @@ Return ONLY this JSON (no explanation, no markdown):
         match = re.search(r"\[.*\]", raw, re.DOTALL)
         if match:
             ranked = json.loads(match.group())
-            ranked = ranked[:top_n]
             logger.info(f"AI topic filter: {len(ranked)} topics ranked — top: '{ranked[0]['title']}'")
-            return ranked
-        logger.warning("AI topic filter returned no valid JSON — using raw fallback")
+        else:
+            logger.warning("AI topic filter returned no valid JSON — using raw fallback")
 
     except Exception as exc:
         logger.warning(f"AI topic filter failed ({exc}) — using raw topic list as fallback")
 
-    # Fallback: return first top_n raw topics wrapped as dicts
-    return [{"title": t, "angle": "", "audience": "general", "score": 0.0}
-            for t in raw_topics[:top_n]]
+    if not ranked:
+        ranked = [{"title": t, "angle": "", "audience": "general", "score": 0.0}
+                  for t in raw_topics[: max(top_n * 3, top_n)]]
+
+    return rerank_topics(ranked, raw_signals=raw_topics, top_n=top_n)
 
 
 # ---------------------------------------------------------------------------

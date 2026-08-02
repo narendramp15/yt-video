@@ -519,6 +519,105 @@ def _make_intro_clip(
 
 
 # ---------------------------------------------------------------------------
+# Burned-in captions
+# ---------------------------------------------------------------------------
+def _wrap_caption_text(text: str, max_chars: int = 28) -> str:
+    words = text.split()
+    if not words:
+        return ""
+    lines: list[str] = []
+    cur = words[0]
+    for w in words[1:]:
+        if len(cur) + 1 + len(w) <= max_chars:
+            cur = f"{cur} {w}"
+        else:
+            lines.append(cur)
+            cur = w
+            if len(lines) >= 2:
+                break
+    if len(lines) < 2:
+        lines.append(cur)
+    return "\n".join(lines[:2])
+
+
+def _make_caption_clips(
+    cues: list[dict],
+    size: tuple[int, int] = (_W, _H),
+    fps: int = 24,
+) -> list[VideoClip]:
+    """Build per-cue burned caption overlays for mute / mobile viewers."""
+    if not cues:
+        return []
+
+    width, height = size
+    is_vertical = height > width
+    font_size = 54 if is_vertical else 42
+    bar_h = 160 if is_vertical else 110
+    y_pos = int(height * (0.72 if is_vertical else 0.82))
+    font = _load_font(font_size, bold=True)
+    clips: list[VideoClip] = []
+
+    for cue in cues:
+        text = _wrap_caption_text(str(cue.get("text", "")), max_chars=26 if is_vertical else 36)
+        if not text:
+            continue
+        start = float(cue.get("start", 0.0))
+        end = float(cue.get("end", start + 1.0))
+        dur = max(end - start, 0.2)
+
+        def make_frame(t: float, caption=text) -> np.ndarray:
+            canvas = Image.new("RGBA", (width, bar_h), (0, 0, 0, 0))
+            bar = Image.new("RGBA", (width, bar_h), (0, 0, 0, 150))
+            draw = ImageDraw.Draw(bar)
+            # Center multiline text
+            y = 18
+            for line in caption.split("\n"):
+                bbox = draw.textbbox((0, 0), line, font=font)
+                tw = bbox[2] - bbox[0]
+                draw.text(
+                    ((width - tw) // 2, y),
+                    line,
+                    font=font,
+                    fill=(255, 255, 255, 245),
+                    stroke_width=2,
+                    stroke_fill=(0, 0, 0, 220),
+                )
+                y += font_size + 6
+            canvas.paste(bar, (0, 0))
+            return np.array(canvas.convert("RGB"))
+
+        clip = VideoClip(make_frame, duration=dur).with_fps(fps)
+        clips.append(clip.with_start(start).with_position(("center", y_pos)))
+
+    return clips
+
+
+def _vertical_ken_burns(
+    image_path: str,
+    duration: float,
+    size: tuple[int, int] = (1080, 1920),
+) -> VideoClip:
+    """Center-crop a 16:9 still into 9:16 with mild zoom."""
+    tw, th = size
+    src = Image.open(image_path).convert("RGB")
+    # Scale so height fills, then crop width (or pad if portrait already)
+    scale = max(tw / src.width, th / src.height) * 1.04
+    nw, nh = int(src.width * scale), int(src.height * scale)
+    large = src.resize((nw, nh), Image.LANCZOS)
+    arr = np.array(large, dtype=np.uint8)
+
+    def make_frame(t: float) -> np.ndarray:
+        progress = t / max(duration, 0.001)
+        max_x = max(nw - tw, 0)
+        max_y = max(nh - th, 0)
+        x = int(max_x * 0.15 + max_x * 0.7 * progress)
+        y = int(max_y * 0.5)
+        return arr[y:y + th, x:x + tw].copy()
+
+    return VideoClip(make_frame, duration=duration).with_fps(24)
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 def create_video(
@@ -535,6 +634,8 @@ def create_video(
     enable_chapter_cards: bool | None = None,
     enable_intro_card: bool | None = None,
     enable_lower_thirds: bool | None = None,
+    captions: list[dict] | None = None,
+    burn_captions: bool | None = None,
 ) -> str:
     """
     Assemble the final YouTube video locally using FFmpeg + MoviePy.
@@ -556,6 +657,8 @@ def create_video(
     enable_chapter_cards : full-screen chapter transitions (default: config, off)
     enable_intro_card    : 2s topic card at t=0 (default: config, off — fights hook)
     enable_lower_thirds  : per-scene label bars (default: config, off — less AI look)
+    captions     : optional [{text,start,end}] cues to burn in
+    burn_captions: override for BURN_CAPTIONS_ENABLED
 
     Returns: path to the rendered video file.
     """
@@ -574,6 +677,9 @@ def create_video(
     )
     use_lower_thirds = (
         config.LOWER_THIRDS_ENABLED if enable_lower_thirds is None else enable_lower_thirds
+    )
+    use_captions = (
+        config.BURN_CAPTIONS_ENABLED if burn_captions is None else burn_captions
     )
 
     # Never paint finance chrome unless the caller explicitly provided items.
@@ -644,6 +750,14 @@ def create_video(
     if not use_chapter_cards:
         logger.info("Chapter cards disabled — retention-safe")
 
+    # 3b. Burned captions (mute retention)
+    if use_captions and captions:
+        caption_clips = _make_caption_clips(captions, size=(_W, _H))
+        overlays.extend(caption_clips)
+        logger.info(f"Burning {len(caption_clips)} caption cue(s) into long-form")
+    elif use_captions:
+        logger.info("Caption burn enabled but no cues provided — skipping")
+
     final_video = (
         CompositeVideoClip([bg] + overlays, size=(_W, _H))
         if overlays
@@ -680,4 +794,60 @@ def create_video(
         audio_codec="aac",
     )
     logger.info(f"Video rendering complete ✓  → {out_path}")
+    return out_path
+
+
+def create_shorts_video(
+    voice_path: str,
+    scene_images: dict[str, str] | None = None,
+    captions: list[dict] | None = None,
+    out_path: str = "output/shorts.mp4",
+) -> str:
+    """
+    Assemble a vertical Shorts video (1080x1920) from shorts voice + scene stills.
+    Captions are always burned in for mute feed viewing.
+    """
+    _SW, _SH = 1080, 1920
+    if not voice_path or not os.path.exists(voice_path):
+        raise FileNotFoundError(f"Shorts voice not found: {voice_path}")
+
+    voice = AudioFileClip(voice_path)
+    from moviepy.audio.fx import AudioFadeIn, AudioFadeOut
+    voice = voice.with_effects([AudioFadeIn(0.2), AudioFadeOut(0.3)])
+    duration = min(float(voice.duration), 55.0)
+    voice = voice.subclipped(0, duration)
+    logger.info(f"Shorts voice duration: {duration:.1f}s")
+
+    paths = [p for p in (scene_images or {}).values() if p and os.path.exists(p)]
+    if not paths:
+        # Solid dark fallback so render never hard-fails
+        def _solid(t: float) -> np.ndarray:
+            return np.full((_SH, _SW, 3), 18, dtype=np.uint8)
+        bg = VideoClip(_solid, duration=duration).with_fps(24)
+    else:
+        per = duration / len(paths)
+        clips = [_vertical_ken_burns(p, per, size=(_SW, _SH)) for p in paths]
+        bg = concatenate_videoclips(clips, method="compose").subclipped(0, duration)
+
+    overlays: list[VideoClip] = []
+    if captions:
+        overlays.extend(_make_caption_clips(captions, size=(_SW, _SH)))
+        logger.info(f"Shorts: burning {len(overlays)} caption cue(s)")
+
+    final_video = (
+        CompositeVideoClip([bg] + overlays, size=(_SW, _SH))
+        if overlays
+        else bg
+    )
+    final_video = final_video.with_audio(voice)
+
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    logger.info(f"Rendering Shorts → {out_path} ...")
+    final_video.write_videofile(
+        out_path,
+        fps=24,
+        codec="libx264",
+        audio_codec="aac",
+    )
+    logger.info(f"Shorts render complete ✓  → {out_path}")
     return out_path

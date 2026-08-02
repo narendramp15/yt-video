@@ -21,6 +21,10 @@ Optional .env keys:
   EDGE_TTS_PITCH        — pitch shift, e.g. +1Hz
   POLLINATIONS_MODEL    — image generation model: flux-realism (default) | flux | turbo
   LOWER_THIRDS_ENABLED  — scene label lower-thirds (default: false — less template look)
+  SHORTS_ENABLED        — render + upload Shorts from shorts_script (default: true)
+  BURN_CAPTIONS_ENABLED — burn Whisper captions into long-form MP4 (default: true)
+  CHANNEL_PRIMARY_NICHE — comma keywords for topic niche fit (optional)
+  PACKAGING_VARIANTS    — title/thumb A/B variant count (default: 3)
 """
 
 import os
@@ -79,6 +83,18 @@ class Config:
     LOWER_THIRDS_ENABLED = _env_flag("LOWER_THIRDS_ENABLED", False)
     # Overlay 3–5 word hook text on thumbnails (Pillow) for mobile CTR.
     THUMBNAIL_TEXT_ENABLED = _env_flag("THUMBNAIL_TEXT_ENABLED", True)
+    # Phase B — burn Whisper captions into long-form (mute retention).
+    BURN_CAPTIONS_ENABLED = _env_flag("BURN_CAPTIONS_ENABLED", True)
+    # Phase B — render + upload Shorts cutdown from shorts_script.
+    SHORTS_ENABLED = _env_flag("SHORTS_ENABLED", True)
+    # Phase B — optional niche keywords for topic re-rank (comma-separated).
+    CHANNEL_PRIMARY_NICHE = [
+        p.strip().lower()
+        for p in os.getenv("CHANNEL_PRIMARY_NICHE", "").split(",")
+        if p.strip()
+    ]
+    # Phase B — how many title/hook packages to generate for heuristic A/B.
+    PACKAGING_VARIANTS = max(1, int(os.getenv("PACKAGING_VARIANTS", "3")))
 
     # ── Script generation ─────────────────────────────────────────────────
     # gpt-4o-mini (~$0.06/mo) | deepseek-chat (~$0.01/mo) | deepseek-reasoner
