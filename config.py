@@ -17,7 +17,10 @@ Optional .env keys:
   SCRIPT_MODEL          — gpt-4o-mini (default) | deepseek-chat | deepseek-reasoner
   DEEPSEEK_API_KEY      — only needed when SCRIPT_MODEL starts with "deepseek"
   EDGE_TTS_VOICE        — Microsoft Edge TTS voice (default: en-IN-NeerjaNeural)
-  POLLINATIONS_MODEL    — image generation model: flux (default) | turbo | flux-realism
+  EDGE_TTS_RATE         — speaking rate, e.g. -8% (slightly slower = more human)
+  EDGE_TTS_PITCH        — pitch shift, e.g. +1Hz
+  POLLINATIONS_MODEL    — image generation model: flux-realism (default) | flux | turbo
+  LOWER_THIRDS_ENABLED  — scene label lower-thirds (default: false — less template look)
 """
 
 import os
@@ -38,9 +41,9 @@ def _resolve_project_path(raw: str | None) -> str | None:
   path = Path(raw)
   return str(path if path.is_absolute() else _PROJECT_ROOT / path)
 
-# Project root is one level up from this file (yt_video/ → yt-ai-factory/)
+# Project root = directory containing this file (yt-video/).
 # Resolved at import time using __file__ so os.chdir() in main.py doesn't affect it.
-_PROJECT_ROOT = Path(__file__).parent.parent
+_PROJECT_ROOT = Path(__file__).parent
 
 # Shared persistent state directory for memory/db files (project-root/state)
 STATE_DIR = _PROJECT_ROOT / "state"
@@ -63,7 +66,19 @@ class Config:
     OPENAI_API_KEY        = os.getenv("OPENAI_API_KEY")
     YOUTUBE_CLIENT_SECRET = _RESOLVED_CLIENT_SECRET
     CHANNEL_NAME          = os.getenv("CHANNEL_NAME")
-    DEFAULT_CATEGORY      = os.getenv("DEFAULT_CATEGORY", "25")   # 25 = News & Politics
+    # Fallback only — packaging_service.resolve_category_id() maps per-topic.
+    # 22 = People & Blogs (safer default than always News & Politics).
+    DEFAULT_CATEGORY      = os.getenv("DEFAULT_CATEGORY", "22")
+
+    # ── Video packaging / retention craft ────────────────────────────────
+    # Full-screen chapter cards every scene break kill watch time — off by default.
+    CHAPTER_CARDS_ENABLED = _env_flag("CHAPTER_CARDS_ENABLED", False)
+    # Intro card at t=0 fights the spoken hook — off by default.
+    INTRO_CARD_ENABLED = _env_flag("INTRO_CARD_ENABLED", False)
+    # Lower-thirds every scene look template/AI — off by default.
+    LOWER_THIRDS_ENABLED = _env_flag("LOWER_THIRDS_ENABLED", False)
+    # Overlay 3–5 word hook text on thumbnails (Pillow) for mobile CTR.
+    THUMBNAIL_TEXT_ENABLED = _env_flag("THUMBNAIL_TEXT_ENABLED", True)
 
     # ── Script generation ─────────────────────────────────────────────────
     # gpt-4o-mini (~$0.06/mo) | deepseek-chat (~$0.01/mo) | deepseek-reasoner
@@ -75,6 +90,9 @@ class Config:
     # Indian voices: en-IN-NeerjaNeural (female) | en-IN-PrabhatNeural (male)
     # Full list: https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support
     EDGE_TTS_VOICE = os.getenv("EDGE_TTS_VOICE", "en-IN-NeerjaNeural")
+    # Slightly slower + tiny pitch lift reads less robotic than stock defaults.
+    EDGE_TTS_RATE  = os.getenv("EDGE_TTS_RATE", "-8%")
+    EDGE_TTS_PITCH = os.getenv("EDGE_TTS_PITCH", "+1Hz")
 
     # ── Image Generation — pluggable provider chain ──────────────────────
     # IMAGE_PROVIDERS is an ordered, comma-separated chain tried per image;
@@ -96,8 +114,8 @@ class Config:
 
     # Pollinations provider (free). Set POLLINATIONS_KEY for authenticated
     # access (removes rate limits). Get key at: https://enter.pollinations.ai/
-    # Models: flux (default), flux-realism, turbo
-    POLLINATIONS_MODEL = os.getenv("POLLINATIONS_MODEL", "flux")
+    # Models: flux-realism (default — less AI-art look), flux, turbo
+    POLLINATIONS_MODEL = os.getenv("POLLINATIONS_MODEL", "flux-realism")
     POLLINATIONS_KEY   = os.getenv("POLLINATIONS_KEY")
 
     # OpenAI image provider (paid) — only used when 'openai' is in IMAGE_PROVIDERS.

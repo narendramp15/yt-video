@@ -13,7 +13,7 @@ import os
 import glob
 from datetime import date
 from logger import logger
-from yt_video.config import config
+from config import config
 
 # Use centralized state path for yt_video
 STATE_FILE = config.YT_PIPELINE_STATE_PATH

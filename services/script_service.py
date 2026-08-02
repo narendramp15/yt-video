@@ -103,19 +103,28 @@ CRITICAL RULES for [LONG_SCRIPT]:
   [SCENE:s3] ... numbered sequentially with no gaps, then [SCENE:outro] last.
 - Produce 24 to 36 scene markers in total. A long stretch with no marker is wrong.
 - Each [SCENE:label] tag MUST be on its own line, alone, exactly as shown.
-- MANDATORY 3-PART HOOK at the very start of the script (before first [SCENE:] tag):
-    Line 1 — Curiosity Hook  (≤15 words): tease the biggest insight or surprise angle
-    Line 2 — Credibility     (≤10 words): "Real data. Verified sources. No speculation."
-    Line 3 — Viewer Promise  (≤20 words): what they will know / be able to do by the end
-  Example:  "This one trend is about to change everything you know about investing."
-            "Real data. Verified sources. No guesswork."
-            "By the end you'll know exactly which sector to watch this week."
-- Structure: Hook (3 lines) → [SCENE:intro] → 5 content chapters, EACH chapter
-  broken into 4-6 [SCENE:sN] beats → CTA → [SCENE:outro].
+
+SOUND HUMAN (not AI):
+- Open with a cold open — one concrete moment, number, or surprising detail.
+  Talk like a sharp friend explaining something, not a corporate explainer.
+- FORBIDDEN openings / phrases (never use these):
+  "Real data. Verified sources." / "No speculation." / "No guesswork."
+  "In this video we'll…" / "Today we're going to…" / "Without further ado"
+  "Let's dive in" / "Buckle up" / "Game changer" / "In today's fast-paced world"
+  "It's important to note" / "At the end of the day" / "Here's why it matters"
+- Use contractions (you'll, that's, won't, here's). Mix short punchy lines
+  with slightly longer ones. Ask a rhetorical question every few minutes.
+- Include 2–4 natural asides ("look,", "here's the thing,", "and this is wild —")
+  so the pacing feels spoken, not essay-written.
+- Prefer specific names, places, numbers, and dates over vague claims.
+- End with a soft CTA that feels like a real person asking a question,
+  not a template subscribe pitch.
+- Structure: Cold open (2–4 spoken lines) → [SCENE:intro] → 5 content chapters,
+  EACH broken into 4–6 [SCENE:sN] beats → soft CTA → [SCENE:outro].
 - Do NOT use any markdown formatting or headers.
 
 [SHORTS_SCRIPT]
-<a punchy 50–60 second version — spoken words only, same rules as above>
+<a punchy 50–60 second version — spoken words only, same human-voice rules as above>
 
 [SEO_TITLE]
 <one YouTube title — under 70 characters, high click-through, no clickbait>
@@ -135,16 +144,18 @@ CRITICAL RULES for [SCENE_PROMPTS]:
 - The brief must depict the SPECIFIC thing that scene's narration is about — match
   the subject of those 2-4 sentences exactly, not the video's general topic.
 - Visual brief must describe what should be visible on screen, not what the narrator says.
+- Lead with a real-world subject. Prefer photorealistic / documentary / natural light
+  cues over "cinematic AI art", neon, glow, or dark gradient aesthetics.
 - Use concrete subjects, actions, setting, mood, camera framing, and domain-specific objects.
 - Avoid vague phrases like "relevant to topic" or "about this subject".
 - DO NOT include text overlays, captions, logos, watermarks, or UI screenshots unless the topic truly requires them.
-- Example: `section2 | Cricket bowler releasing a yorker under stadium lights, batsman defending, tense IPL match atmosphere, telephoto sports photography`
+- Example: `s2 | Cricket bowler releasing a yorker under stadium lights, batsman defending, documentary sports photo, natural light`
 
 [THUMBNAIL_PROMPT]
 <one concise visual brief for the thumbnail>
 CRITICAL RULES for [THUMBNAIL_PROMPT]:
-- Focus on one striking visual concept for high click-through.
-- Use concrete subject matter and strong contrast.
+- Focus on one striking real-world visual concept for high click-through.
+- Prefer photorealistic subject + strong contrast. Avoid plastic AI-illustration looks.
 - No text, no watermark, no logo clutter."""
 
 
@@ -202,11 +213,13 @@ def generate_script(
     if analytics_block:
         logger.info("Injecting YouTube Analytics performance notes into prompt")
 
-    prompt = f"""You are a professional YouTube scriptwriter for a general-audience channel.
+    prompt = f"""You are a YouTube creator who scripts the way people actually talk on camera —
+curious, specific, and a little imperfect. Never sound like a corporate AI explainer.
 
 VIDEO TOPIC: {topic}
 {angle_block}{trend_block}
-CHANNEL STYLE: Informative, entertaining, curiosity-driven. Tone: conversational but authoritative.
+CHANNEL STYLE: A sharp friend walking you through something interesting. Warm, direct, lightly witty.
+Avoid polished brochure tone. Prefer concrete details over abstract hype.
 TARGET AUDIENCE: India, 18–35, English-speaking, interested in trending real-world topics.
 {analytics_block}{memory_block}
 {_OUTPUT_FORMAT}
@@ -295,7 +308,8 @@ RULES per prompt:
 - Lead with a concrete subject (a person, object, place, or action).
 - Use vivid concrete nouns. No abstractions like "insight", "trend", "emotion".
 - Maximum 25 words.
-- End with 2-3 visual style keywords (e.g. "editorial photography, cinematic lighting").
+- End with 2-3 photo-real style keywords (e.g. "documentary photo, natural light, shallow depth of field").
+- Prefer real photography cues. Avoid neon glow, dark gradients, plastic CGI, or "AI art" looks.
 - Never include text, captions, watermarks, or UI elements.
 - Each scene must be visually distinct from the others.
 

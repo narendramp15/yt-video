@@ -20,6 +20,7 @@ Components:
 """
 
 import os
+import re
 import glob
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -207,12 +208,15 @@ def _ken_burns_clip(
     symbol: str = "",
 ) -> VideoClip:
     """Slow pan + zoom (Ken Burns) over a static image."""
+    # Milder zoom reads less like stock AI slideshow motion.
+    zoom = 1.03
     large = Image.open(image_path).convert("RGB").resize(
-        (int(_W * 1.06), int(_H * 1.06)), Image.LANCZOS
+        (int(_W * zoom), int(_H * zoom)), Image.LANCZOS
     )
     large_arr  = np.array(large, dtype=np.uint8)
     lw, lh     = large_arr.shape[1], large_arr.shape[0]
-    label_rgba = _make_label_overlay(symbol) if symbol else None
+    # Only stamp a bottom label for real finance tickers — never for intro/s1/etc.
+    label_rgba = _make_label_overlay(symbol) if _is_finance_symbol(symbol) else None
 
     def make_frame(t: float) -> np.ndarray:
         progress = t / max(duration, 0.001)
@@ -226,6 +230,21 @@ def _ken_burns_clip(
         return frame
 
     return VideoClip(make_frame, duration=duration).with_fps(24)
+
+
+def _is_finance_symbol(symbol: str) -> bool:
+    """True only for stock/index tickers — not scene labels like intro/s1."""
+    if not symbol:
+        return False
+    s = symbol.strip()
+    if not s or s.lower() in {"intro", "outro"}:
+        return False
+    if re.fullmatch(r"s\d+", s, flags=re.IGNORECASE):
+        return False
+    if re.fullmatch(r"section\d+", s, flags=re.IGNORECASE):
+        return False
+    # NSE-style tickers are usually uppercase alphanumerics
+    return bool(re.fullmatch(r"[A-Z][A-Z0-9.&-]{1,14}", s))
 
 
 def _build_background_timed(
@@ -508,10 +527,14 @@ def create_video(
     stat_cards: list[dict] | None = None,
     scene_images: dict[str, str] | None = None,
     scene_labels: list[str] | None = None,
+    scene_titles: dict[str, str] | None = None,
     topic: str = "",
     angle: str = "",
     voice_path: str | None = None,
     out_path: str = "output/final_video.mp4",
+    enable_chapter_cards: bool | None = None,
+    enable_intro_card: bool | None = None,
+    enable_lower_thirds: bool | None = None,
 ) -> str:
     """
     Assemble the final YouTube video locally using FFmpeg + MoviePy.
@@ -520,14 +543,19 @@ def create_video(
     ----------
     timeline     : { symbol: start_seconds } — chart sync timeline
     ticker_items : list of ticker strings for the scrolling bottom bar
-    stat_cards   : list of stat card configs
+                   (finance only — leave empty for general topics)
+    stat_cards   : list of stat card configs (finance only — leave empty otherwise)
     scene_images : { symbol: image_path } from image_service (Pollinations.ai)
                    Used as section backgrounds (prioritised over chart PNGs)
     scene_labels : ordered list of scene labels for chapter cards + lower-thirds
+    scene_titles : optional {label: human title} for viewer-facing overlays
     topic        : video topic (used in intro card)
     angle        : content angle/framing (used in intro card subtitle)
     voice_path   : path to the TTS audio file; auto-detected when omitted
     out_path     : destination path for the rendered MP4
+    enable_chapter_cards : full-screen chapter transitions (default: config, off)
+    enable_intro_card    : 2s topic card at t=0 (default: config, off — fights hook)
+    enable_lower_thirds  : per-scene label bars (default: config, off — less AI look)
 
     Returns: path to the rendered video file.
     """
@@ -537,6 +565,24 @@ def create_video(
         voice_path = next((p for p in _voice_files if os.path.exists(p)), None)
     if voice_path is None:
         raise FileNotFoundError("No voice file found — run TTS step first")
+
+    use_chapter_cards = (
+        config.CHAPTER_CARDS_ENABLED if enable_chapter_cards is None else enable_chapter_cards
+    )
+    use_intro_card = (
+        config.INTRO_CARD_ENABLED if enable_intro_card is None else enable_intro_card
+    )
+    use_lower_thirds = (
+        config.LOWER_THIRDS_ENABLED if enable_lower_thirds is None else enable_lower_thirds
+    )
+
+    # Never paint finance chrome unless the caller explicitly provided items.
+    ticker_items = ticker_items or None
+    stat_cards = stat_cards or None
+    if ticker_items == []:
+        ticker_items = None
+    if stat_cards == []:
+        stat_cards = None
 
     voice    = AudioFileClip(voice_path)
     from moviepy.audio.fx import AudioFadeIn, AudioFadeOut
@@ -551,42 +597,52 @@ def create_video(
         else _build_background_equal(duration, scene_images=scene_images)
     )
 
-    # 2. Overlays (ticker + stat cards)
+    # 2. Overlays (ticker + stat cards) — finance-only when provided
     overlays = _build_overlays(
         duration     = duration,
         ticker_items = ticker_items,
         stat_cards   = stat_cards,
     )
 
-    # 3. Scene lower-thirds + chapter cards + intro
+    # 3. Optional lower-thirds + optional chapter cards + optional intro
     sorted_scenes = sorted(timeline.items(), key=lambda x: x[1]) if timeline else []
     chapter_labels = scene_labels or [s for s, _ in sorted_scenes]
     total_ch = max(len(chapter_labels), 1)
+    titles = scene_titles or {}
 
-    if topic and duration > 0:
+    if use_intro_card and topic and duration > 0:
         intro = _make_intro_clip(topic=topic, angle=angle, duration=2.0)
         overlays.append(intro)
+    elif topic:
+        logger.info("Intro card disabled — spoken hook owns the first seconds")
 
     for ch_idx, (label, start_t) in enumerate(sorted_scenes):
         if label in ("intro", "outro", "NIFTY"):
             continue
         end_t    = sorted_scenes[ch_idx + 1][1] if ch_idx + 1 < len(sorted_scenes) else duration
         seg_dur  = max(end_t - start_t, 1.0)
-        lt_dur   = min(6.0, seg_dur * 0.35)
+        display  = titles.get(label) or label
 
-        lt = _make_lower_third_clip(label=label, start=start_t, duration=lt_dur)
-        overlays.append(lt)
+        if use_lower_thirds:
+            lt_dur = min(6.0, seg_dur * 0.35)
+            lt = _make_lower_third_clip(label=display, start=start_t, duration=lt_dur)
+            overlays.append(lt)
 
-        if ch_idx > 0:
+        if use_chapter_cards and ch_idx > 0:
             card_start = max(start_t - 0.3, 0.0)
             card = _make_chapter_card_clip(
                 chapter_num    = ch_idx,
                 total_chapters = total_ch,
-                label          = label,
+                label          = display,
                 start          = card_start,
                 duration       = 2.5,
             )
             overlays.append(card)
+
+    if not use_lower_thirds:
+        logger.info("Lower-thirds disabled — cleaner, less template look")
+    if not use_chapter_cards:
+        logger.info("Chapter cards disabled — retention-safe")
 
     final_video = (
         CompositeVideoClip([bg] + overlays, size=(_W, _H))

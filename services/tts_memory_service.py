@@ -142,6 +142,9 @@ def _derive_style_notes(mem: dict) -> list[str]:
         notes.extend([
             "Write ONLY spoken narration — no stage directions, no 'Narrator:' labels, "
             "no parenthetical cues.",
+            "Sound human: contractions, short punchy lines mixed with longer ones, "
+            "occasional rhetorical questions. Never open with canned lines like "
+            "'Real data. Verified sources.' or 'In this video we'll…'.",
             "Avoid em-dashes (—) mid-sentence; use commas or full stops instead as "
             "em-dashes cause unnatural TTS pauses.",
             "Spell out acronyms the first time: 'AI (Artificial Intelligence)' then 'AI'. "
