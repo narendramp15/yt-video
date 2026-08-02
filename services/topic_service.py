@@ -380,9 +380,12 @@ def _tokenize(text: str) -> set[str]:
         "this", "that", "with", "from", "about", "what", "will", "have",
         "your", "their", "when", "which", "into", "over", "after", "before",
         "today", "week", "india", "indian", "video", "news",
+        "an", "as", "at", "be", "by", "do", "if", "in", "is", "it", "no",
+        "of", "on", "or", "so", "to", "up", "we",
     }
+    # Keep 2+ char tokens so niche keywords like "ai" / "ipl" survive.
     return {
-        w for w in re.findall(r"[a-z0-9]{3,}", (text or "").lower())
+        w for w in re.findall(r"[a-z0-9]{2,}", (text or "").lower())
         if w not in stop
     }
 
@@ -549,7 +552,13 @@ Return ONLY this JSON (no explanation, no markdown):
         match = re.search(r"\[.*\]", raw, re.DOTALL)
         if match:
             ranked = json.loads(match.group())
-            logger.info(f"AI topic filter: {len(ranked)} topics ranked — top: '{ranked[0]['title']}'")
+            if ranked:
+                logger.info(
+                    f"AI topic filter: {len(ranked)} topics ranked — "
+                    f"top: '{ranked[0].get('title', '')}'"
+                )
+            else:
+                logger.warning("AI topic filter returned an empty list — using raw fallback")
         else:
             logger.warning("AI topic filter returned no valid JSON — using raw fallback")
 

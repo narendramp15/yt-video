@@ -208,15 +208,14 @@ def score_packaging_variant(variant: dict) -> float:
 
 
 def pick_best_packaging(variants: list[dict]) -> dict:
-    """Return the highest-scoring packaging variant (stable on ties)."""
+    """Return the highest-scoring packaging variant (keeps input order on ties)."""
     if not variants:
         return {"title": "", "hook": "WATCH THIS", "variant_id": "fallback", "score": 0.0}
-    ranked = sorted(
-        variants,
-        key=lambda v: (score_packaging_variant(v), -len(v.get("title") or "")),
-        reverse=True,
-    )
-    best = dict(ranked[0])
+    best = max(
+        enumerate(variants),
+        key=lambda pair: (score_packaging_variant(pair[1]), -pair[0]),
+    )[1]
+    best = dict(best)
     best["score"] = score_packaging_variant(best)
     return best
 

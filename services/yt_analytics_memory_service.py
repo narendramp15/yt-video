@@ -75,7 +75,8 @@ def _load() -> dict:
 
 
 def _save(mem: dict) -> None:
-    os.makedirs("output", exist_ok=True)
+    parent = os.path.dirname(_MEMORY_PATH) or "."
+    os.makedirs(parent, exist_ok=True)
     with open(_MEMORY_PATH, "w", encoding="utf-8") as f:
         json.dump(mem, f, indent=2, ensure_ascii=False)
 

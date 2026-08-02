@@ -565,26 +565,28 @@ def _make_caption_clips(
         end = float(cue.get("end", start + 1.0))
         dur = max(end - start, 0.2)
 
-        def make_frame(t: float, caption=text) -> np.ndarray:
-            canvas = Image.new("RGBA", (width, bar_h), (0, 0, 0, 0))
-            bar = Image.new("RGBA", (width, bar_h), (0, 0, 0, 150))
-            draw = ImageDraw.Draw(bar)
-            # Center multiline text
-            y = 18
-            for line in caption.split("\n"):
-                bbox = draw.textbbox((0, 0), line, font=font)
-                tw = bbox[2] - bbox[0]
-                draw.text(
-                    ((width - tw) // 2, y),
-                    line,
-                    font=font,
-                    fill=(255, 255, 255, 245),
-                    stroke_width=2,
-                    stroke_fill=(0, 0, 0, 220),
-                )
-                y += font_size + 6
-            canvas.paste(bar, (0, 0))
-            return np.array(canvas.convert("RGB"))
+        # Pre-render once — cue text is static; redrawing every frame is wasteful.
+        canvas = Image.new("RGBA", (width, bar_h), (0, 0, 0, 0))
+        bar = Image.new("RGBA", (width, bar_h), (0, 0, 0, 150))
+        draw = ImageDraw.Draw(bar)
+        y = 18
+        for line in text.split("\n"):
+            bbox = draw.textbbox((0, 0), line, font=font)
+            tw = bbox[2] - bbox[0]
+            draw.text(
+                ((width - tw) // 2, y),
+                line,
+                font=font,
+                fill=(255, 255, 255, 245),
+                stroke_width=2,
+                stroke_fill=(0, 0, 0, 220),
+            )
+            y += font_size + 6
+        canvas.paste(bar, (0, 0))
+        frame = np.array(canvas.convert("RGB"))
+
+        def make_frame(t: float, cached=frame) -> np.ndarray:
+            return cached
 
         clip = VideoClip(make_frame, duration=dur).with_fps(fps)
         clips.append(clip.with_start(start).with_position(("center", y_pos)))
