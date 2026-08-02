@@ -1,4 +1,4 @@
-"""Smoke tests for packaging helpers (Phase A)."""
+"""Smoke tests for packaging helpers (Phase A + B)."""
 
 from services.packaging_service import (
     build_publish_description,
@@ -6,7 +6,9 @@ from services.packaging_service import (
     derive_thumbnail_hook,
     format_chapter_timestamps,
     humanize_scene_label,
+    pick_best_packaging,
     resolve_category_id,
+    score_packaging_variant,
 )
 
 
@@ -56,10 +58,27 @@ def test_category_and_privacy():
     assert decide_privacy(70, "Yes") == "private"
 
 
+def test_packaging_heuristic_picks_stronger_title():
+    strong = {
+        "title": "Reliance Just Bet $10B on AI Chips",
+        "hook": "RELIANCE AI BET",
+        "variant_id": "v1",
+    }
+    weak = {
+        "title": "You Won't Believe What Happened Today In Tech News Wow",
+        "hook": "WOW",
+        "variant_id": "v2",
+    }
+    assert score_packaging_variant(strong) > score_packaging_variant(weak)
+    best = pick_best_packaging([weak, strong])
+    assert best["variant_id"] == "v1"
+
+
 if __name__ == "__main__":
     test_derive_thumbnail_hook()
     test_humanize_scene_label()
     test_chapters_require_three_and_start_at_zero()
     test_build_description_appends_chapters()
     test_category_and_privacy()
+    test_packaging_heuristic_picks_stronger_title()
     print("packaging_service tests passed")

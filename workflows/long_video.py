@@ -6,23 +6,25 @@ Exact 5-phase flow from spec (yt-cost-effective-pipeline.html):
   Phase 1 — Trend Discovery
     pytrends + RSS feeds + yfinance news  →  raw signals
     AI filter + score (one batch call)    →  Top 3 ranked topics
+    Deterministic novelty/velocity/niche re-rank (Phase B)
 
   Phase 2 — Script Generation  (one mega-prompt AI call)
     Top topic  →  Long script + [SCENE:] visual cues
                +  Shorts script (60 sec)
                +  SEO title, description, 10 tags
+    Packaging A/B: 3 title/hook variants → heuristic pick (Phase B)
 
   Phase 3 — Media Assets  (all free, run in sequence)
-    Edge TTS        →  voice MP3
+    Edge TTS        →  long + shorts voice MP3
     Pollinations.ai →  scene images + thumbnail
-    Whisper         →  captions / scene timestamps
+    Whisper         →  captions / scene timestamps + SRT
 
   Phase 4 — Video Rendering  (local FFmpeg via MoviePy)
-    scene images + voice + bg music  →  final_video.mp4  (16:9)
+    long 16:9 (+ burned captions) + Shorts 9:16 (+ burned captions)
 
   Phase 5 — Review & Publish
-    AI score gate (≥80 → public, else private)
-    YouTube Data API v3  →  upload with full SEO metadata
+    AI score gate (≥80 + safety Yes → public)
+    YouTube Data API v3  →  upload long + Shorts
     Analytics logger     →  output/analytics_log.json (feedback loop)
 
 Checkpoint: output/pipeline_state.json — re-run resumes from failed step.
@@ -35,13 +37,14 @@ NOTE: yt_ai_factory/ handles the NIFTY 50 candlestick-chart pipeline.
 import json
 import os
 import datetime
+from config import config
 from services.topic_service import fetch_trending_topics, filter_and_score_topics, get_content_angle
 from services.script_service import generate_script, strip_scene_markers, ScriptOutput, refine_scene_prompts
 from services.tts_service import generate_voice
-from services.video_service import create_video
+from services.video_service import create_video, create_shorts_video
 from services.youtube_service import upload_video, post_pinned_comment
 from services.review_service import review_script, extract_score, extract_safety, log_review
-from services.sync_service import transcribe_and_sync
+from services.sync_service import transcribe_and_sync, load_caption_cues, words_to_srt, transcribe_words
 from services.checkpoint_service import is_done, mark_done, get_step_data
 from services.image_service import generate_scene_images_for_scenes, generate_thumbnail
 from services.tts_memory_service import analyze_and_update
@@ -52,6 +55,8 @@ from services.packaging_service import (
     build_publish_description,
     decide_privacy,
     derive_thumbnail_hook,
+    generate_packaging_variants,
+    pick_best_packaging,
     resolve_category_id,
     scene_titles_from_script,
 )
@@ -128,10 +133,10 @@ def _log_analytics(video_id: str | None, topic: str, seo_title: str, privacy: st
 # ---------------------------------------------------------------------------
 def run_long_video(no_upload: bool = False) -> None:
     logger.info("=== yt-video FREE pipeline started ===")
-    logger.info("  Phase 1 — Trend Discovery  : pytrends + RSS + yfinance → AI filter")
-    logger.info("  Phase 2 — Script           : mega-prompt (long + shorts + SEO)")
-    logger.info("  Phase 3 — Assets           : Edge TTS + Pollinations + Whisper")
-    logger.info("  Phase 4 — Render           : local MoviePy + FFmpeg")
+    logger.info("  Phase 1 — Trend Discovery  : pytrends + RSS + yfinance → AI filter + re-rank")
+    logger.info("  Phase 2 — Script           : mega-prompt (long + shorts + SEO) + packaging A/B")
+    logger.info("  Phase 3 — Assets           : Edge TTS + Pollinations + Whisper/SRT")
+    logger.info("  Phase 4 — Render           : long 16:9 + Shorts 9:16 (captions burned)")
     logger.info("  Phase 5 — Publish          : YouTube API + analytics logger")
 
     # ── Phase 1 Step 1: Raw trend signals ──────────────────────────────────
@@ -181,13 +186,50 @@ def run_long_video(no_upload: bool = False) -> None:
     logger.info(f"Shorts:      {len(script_out.shorts_script):,} chars")
     logger.info(f"SEO title:   {script_out.seo_title}")
     logger.info(f"Tags:        {script_out.seo_tags}")
-    # Derive slug-based output paths from the SEO title
-    _slug           = _make_slug(script_out.seo_title or topic)
-    _voice_path_def = f"output/{_slug}_voice.mp3"
-    _video_path     = f"output/{_slug}.mp4"
+
+    # ── Phase 2b: Packaging A/B (title + thumb hook) ──────────────────────
+    if is_done("packaging_ab"):
+        pkg_data = get_step_data("packaging_ab")
+        packaging_variants = pkg_data.get("variants", [])
+        packaging_winner = pkg_data.get("winner") or {}
+        logger.info(
+            f"Packaging (from checkpoint): {packaging_winner.get('variant_id')} "
+            f"score={packaging_winner.get('score')}"
+        )
+    else:
+        packaging_variants = generate_packaging_variants(
+            topic=topic,
+            base_title=script_out.seo_title or topic,
+            angle=angle,
+        )
+        packaging_winner = pick_best_packaging(packaging_variants)
+        mark_done(
+            "packaging_ab",
+            variants=packaging_variants,
+            winner=packaging_winner,
+        )
+        logger.info(
+            f"Packaging winner: {packaging_winner.get('variant_id')} "
+            f"'{packaging_winner.get('title')}' hook='{packaging_winner.get('hook')}'"
+        )
+
+    publish_title = (packaging_winner.get("title") or script_out.seo_title or topic).strip()
+    thumb_hook = (packaging_winner.get("hook") or derive_thumbnail_hook(publish_title)).strip()
+    packaging_variant_id = packaging_winner.get("variant_id") or ""
+
+    # Derive slug-based output paths from the chosen publish title
+    _slug            = _make_slug(publish_title or topic)
+    _voice_path_def  = f"output/{_slug}_voice.mp3"
+    _shorts_voice    = f"output/{_slug}_shorts_voice.mp3"
+    _video_path      = f"output/{_slug}.mp4"
+    _shorts_path     = f"output/{_slug}_shorts.mp4"
     _transcript_path = f"output/{_slug}_transcript.json"
-    _timeline_path  = f"output/{_slug}_timeline.json"
+    _shorts_transcript = f"output/{_slug}_shorts_transcript.json"
+    _timeline_path   = f"output/{_slug}_timeline.json"
+    _srt_path        = f"output/{_slug}.srt"
+    _shorts_srt      = f"output/{_slug}_shorts.srt"
     logger.info(f"Output slug: {_slug}")
+
     # ── Phase 2 (self-review): AI safety + quality gate ───────────────────
     if is_done("review_script"):
         review_data = get_step_data("review_script")
@@ -202,7 +244,7 @@ def run_long_video(no_upload: bool = False) -> None:
         mark_done("review_script", score=score, safety=safety)
         logger.info(f"Review score: {score}/100  safety={safety}")
 
-    # ── Phase 3a: Edge TTS voiceover ───────────────────────────────────────
+    # ── Phase 3a: Edge TTS voiceover (long) ────────────────────────────────
     if is_done("generate_voice"):
         voice_path = get_step_data("generate_voice").get("voice_path", _voice_path_def)
         logger.info(f"Voice (from checkpoint): {voice_path}")
@@ -210,6 +252,19 @@ def run_long_video(no_upload: bool = False) -> None:
         narration  = strip_scene_markers(script_out.long_script)
         voice_path = generate_voice(narration, out_path=_voice_path_def)
         mark_done("generate_voice", voice_path=voice_path)
+
+    # ── Phase 3a2: Shorts TTS ──────────────────────────────────────────────
+    shorts_voice_path = None
+    if config.SHORTS_ENABLED and (script_out.shorts_script or "").strip():
+        if is_done("generate_shorts_voice"):
+            shorts_voice_path = get_step_data("generate_shorts_voice").get(
+                "voice_path", _shorts_voice
+            )
+            logger.info(f"Shorts voice (from checkpoint): {shorts_voice_path}")
+        else:
+            shorts_narration = strip_scene_markers(script_out.shorts_script)
+            shorts_voice_path = generate_voice(shorts_narration, out_path=_shorts_voice)
+            mark_done("generate_shorts_voice", voice_path=shorts_voice_path)
 
     # ── Phase 3b: Pollinations scene images + thumbnail ───────────────────
     # Always check if topic has changed; if so, regenerate fresh images
@@ -228,13 +283,6 @@ def run_long_video(no_upload: bool = False) -> None:
         scene_texts = _scene_texts_from_script(script_out.long_script)
         logger.info(f"Generating {len(labels)} scene images via Pollinations.ai...")
 
-        # Note: image_service uses a content-addressed cache keyed on
-        # (prompt, seed, model, dims). Different prompts → cache miss → fresh
-        # image, so we no longer need to delete old files preemptively.
-
-        # Second-pass LLM call to tighten scene prompts before image generation.
-        # The mega-script LLM treats SCENE_PROMPTS as an afterthought; a focused
-        # rewrite materially improves diffusion-model output quality.
         try:
             refined_prompts = refine_scene_prompts(
                 topic           = topic,
@@ -256,17 +304,23 @@ def run_long_video(no_upload: bool = False) -> None:
         )
         try:
             thumbnail_path = generate_thumbnail(
-                title           = script_out.seo_title or topic,
+                title           = publish_title,
                 topic           = topic,
                 prompt_override = script_out.thumbnail_prompt,
-                hook_text       = derive_thumbnail_hook(script_out.seo_title or topic),
+                hook_text       = thumb_hook,
             )
         except Exception as exc:
             logger.warning(f"Thumbnail generation failed (non-fatal): {exc}")
             thumbnail_path = None
-        mark_done("generate_images", scene_images=scene_images, thumbnail_path=thumbnail_path, topic=topic)
+        mark_done(
+            "generate_images",
+            scene_images=scene_images,
+            thumbnail_path=thumbnail_path,
+            topic=topic,
+            thumb_hook=thumb_hook,
+        )
 
-    # ── Phase 3c: Whisper captions + scene timestamps ─────────────────────
+    # ── Phase 3c: Whisper captions + scene timestamps (long) ───────────────
     if is_done("sync_scenes"):
         with open(_timeline_path) as f:
             timeline = json.load(f)
@@ -276,8 +330,36 @@ def run_long_video(no_upload: bool = False) -> None:
             voice_path, script_out.long_script,
             transcript_path=_transcript_path,
             timeline_path=_timeline_path,
+            srt_path=_srt_path,
         )
-        mark_done("sync_scenes")
+        mark_done("sync_scenes", srt_path=_srt_path)
+
+    long_captions = load_caption_cues(_transcript_path)
+
+    # ── Phase 3c2: Shorts Whisper / captions ───────────────────────────────
+    shorts_captions: list[dict] = []
+    if shorts_voice_path and config.SHORTS_ENABLED:
+        if is_done("sync_shorts"):
+            shorts_captions = load_caption_cues(
+                get_step_data("sync_shorts").get("transcript_path", _shorts_transcript)
+            )
+            logger.info(f"Shorts captions (from checkpoint): {len(shorts_captions)} cues")
+        else:
+            try:
+                words = transcribe_words(shorts_voice_path)
+                os.makedirs("output", exist_ok=True)
+                with open(_shorts_transcript, "w", encoding="utf-8") as f:
+                    json.dump(words, f, indent=2)
+                words_to_srt(words, _shorts_srt)
+                shorts_captions = load_caption_cues(_shorts_transcript)
+                mark_done(
+                    "sync_shorts",
+                    transcript_path=_shorts_transcript,
+                    srt_path=_shorts_srt,
+                )
+            except Exception as exc:
+                logger.warning(f"Shorts Whisper failed (non-fatal): {exc}")
+                mark_done("sync_shorts", transcript_path=_shorts_transcript, error=str(exc))
 
     # ── TTS learning: analyze this run and update memory for next run ──────
     try:
@@ -288,16 +370,15 @@ def run_long_video(no_upload: bool = False) -> None:
     except Exception as exc:
         logger.warning(f"TTS memory update failed (non-fatal): {exc}")
 
-    # ── Phase 4: Render video (local MoviePy + FFmpeg) ────────────────────
+    # ── Phase 4: Render long video ─────────────────────────────────────────
     scene_label_list = _scene_labels_from_script(script_out.long_script)
     scene_text_map = _scene_texts_from_script(script_out.long_script)
     scene_title_map = scene_titles_from_script(scene_label_list, scene_text_map)
 
     if not is_done("create_video"):
-        logger.info("Assembling video locally (MoviePy + FFmpeg)...")
+        logger.info("Assembling long video locally (MoviePy + FFmpeg)...")
         create_video(
             timeline     = timeline,
-            # Finance chrome stays off for this general-topic pipeline
             ticker_items = None,
             stat_cards   = None,
             scene_images = scene_images,
@@ -307,10 +388,29 @@ def run_long_video(no_upload: bool = False) -> None:
             angle        = angle,
             voice_path   = voice_path,
             out_path     = _video_path,
+            captions     = long_captions,
         )
         mark_done("create_video", video_path=_video_path)
 
-    # ── Phase 5: Upload to YouTube ────────────────────────────────────────
+    # ── Phase 4b: Render Shorts ────────────────────────────────────────────
+    if shorts_voice_path and config.SHORTS_ENABLED and not is_done("create_shorts"):
+        logger.info("Assembling Shorts video (9:16)...")
+        # Prefer a short subset of scenes for vertical pacing
+        short_images = dict(list((scene_images or {}).items())[:6])
+        create_shorts_video(
+            voice_path   = shorts_voice_path,
+            scene_images = short_images,
+            captions     = shorts_captions,
+            out_path     = _shorts_path,
+        )
+        mark_done("create_shorts", video_path=_shorts_path)
+    elif is_done("create_shorts"):
+        logger.info(
+            f"Shorts (from checkpoint): "
+            f"{get_step_data('create_shorts').get('video_path', _shorts_path)}"
+        )
+
+    # ── Phase 5: Upload long video ─────────────────────────────────────────
     video_id = None
     privacy = decide_privacy(score, safety)
     if no_upload:
@@ -341,11 +441,11 @@ def run_long_video(no_upload: bool = False) -> None:
         )
         category_id = resolve_category_id(
             topic=topic,
-            title=script_out.seo_title or topic,
+            title=publish_title,
         )
 
         video_id = upload_video(
-            title          = script_out.seo_title or topic,
+            title          = publish_title,
             description    = description,
             privacy_status = privacy,
             thumbnail_path = thumbnail_path,
@@ -355,7 +455,6 @@ def run_long_video(no_upload: bool = False) -> None:
         )
         mark_done("upload_video", privacy=privacy, video_id=video_id, category_id=category_id)
 
-        # Post a pinned comment with the topic + angle
         if video_id:
             comment = (
                 f"Today's topic: {topic}. "
@@ -364,7 +463,7 @@ def run_long_video(no_upload: bool = False) -> None:
             )
             post_pinned_comment(video_id, comment)
             post_video_update(
-                title=script_out.seo_title or topic,
+                title=publish_title,
                 video_id=video_id,
                 topic=topic,
                 angle=angle,
@@ -373,24 +472,81 @@ def run_long_video(no_upload: bool = False) -> None:
                 hashtags="#Trending #India #Explained #YouTube",
             )
 
-    # ── Record upload for 48h analytics fetch ─────────────────────────────
+    # ── Phase 5b: Upload Shorts ────────────────────────────────────────────
+    shorts_video_id = None
+    if (
+        config.SHORTS_ENABLED
+        and not no_upload
+        and os.path.exists(_shorts_path)
+    ):
+        if is_done("upload_shorts"):
+            shorts_video_id = get_step_data("upload_shorts").get("video_id")
+            logger.info(f"Shorts already uploaded: {shorts_video_id}")
+        else:
+            shorts_title = publish_title
+            if "#shorts" not in shorts_title.lower():
+                shorts_title = f"{shorts_title[:60].rstrip()} #Shorts"
+            shorts_desc = (
+                f"{topic}\n\n#Shorts #Trending #India\n\n"
+                f"{(script_out.seo_description or '')[:200]}"
+            )
+            shorts_tags = list(script_out.seo_tags or []) + ["Shorts", "trending"]
+            try:
+                shorts_video_id = upload_video(
+                    title          = shorts_title,
+                    description    = shorts_desc,
+                    privacy_status = privacy,
+                    thumbnail_path = None,
+                    tags           = shorts_tags,
+                    video_path     = _shorts_path,
+                    category_id    = resolve_category_id(topic=topic, title=publish_title),
+                )
+                mark_done(
+                    "upload_shorts",
+                    video_id=shorts_video_id,
+                    privacy=privacy,
+                )
+            except Exception as exc:
+                logger.warning(f"Shorts upload failed (non-fatal): {exc}")
+
+    # ── Record uploads for 48h analytics fetch ─────────────────────────────
     if video_id:
         try:
             record_video(
                 video_id       = video_id,
                 topic          = topic,
                 angle          = angle,
-                seo_title      = script_out.seo_title or topic,
+                seo_title      = publish_title,
                 privacy_status = privacy,
+                title          = publish_title,
+                thumb_hook     = thumb_hook,
+                packaging_variant_id = packaging_variant_id,
+                is_short       = False,
             )
         except Exception as exc:
             logger.warning(f"Analytics record failed (non-fatal): {exc}")
+
+    if shorts_video_id:
+        try:
+            record_video(
+                video_id       = shorts_video_id,
+                topic          = topic,
+                angle          = angle,
+                seo_title      = f"{publish_title} #Shorts",
+                privacy_status = privacy,
+                title          = f"{publish_title} #Shorts",
+                thumb_hook     = thumb_hook,
+                packaging_variant_id = packaging_variant_id,
+                is_short       = True,
+            )
+        except Exception as exc:
+            logger.warning(f"Shorts analytics record failed (non-fatal): {exc}")
 
     # ── Phase 5: Analytics logger (feedback loop) ─────────────────────────
     _log_analytics(
         video_id  = video_id,
         topic     = topic,
-        seo_title = script_out.seo_title or topic,
+        seo_title = publish_title,
         privacy   = privacy,
     )
 
