@@ -32,7 +32,7 @@ import json
 import os
 import datetime
 from logger import logger
-from yt_video.config import config
+from config import config
 
 # Path for analytics memory (centralized state dir)
 _MEMORY_PATH   = config.YT_ANALYTICS_MEMORY_PATH
