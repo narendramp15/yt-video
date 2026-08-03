@@ -141,6 +141,26 @@ def test_build_up_next_blurb():
     assert build_up_next_blurb([]) == ""
 
 
+def test_niche_hard_filter_multiword_keywords():
+    ranked = [
+        {"title": "Machine learning model launch", "angle": "deep dive", "score": 8.0},
+        {"title": "Celebrity wedding photos", "angle": "gossip", "score": 9.5},
+    ]
+    old_niche = config_mod.config.CHANNEL_PRIMARY_NICHE
+    old_lock = config_mod.config.NICHE_LOCK_ENABLED
+    try:
+        config_mod.config.CHANNEL_PRIMARY_NICHE = ["machine learning", "ai"]
+        config_mod.config.NICHE_LOCK_ENABLED = True
+        kept = apply_niche_hard_filter(ranked)
+    finally:
+        config_mod.config.CHANNEL_PRIMARY_NICHE = old_niche
+        config_mod.config.NICHE_LOCK_ENABLED = old_lock
+
+    titles = [k["title"] for k in kept]
+    assert "Machine learning model launch" in titles
+    assert "Celebrity wedding photos" not in titles
+
+
 def test_tokenize_keeps_short_niche_tokens():
     tokens = _tokenize("AI startup in India")
     assert "ai" in tokens
@@ -153,5 +173,6 @@ if __name__ == "__main__":
     test_packaging_approve_reject_roundtrip()
     test_detect_weak_retention_bands()
     test_build_up_next_blurb()
+    test_niche_hard_filter_multiword_keywords()
     test_tokenize_keeps_short_niche_tokens()
     print("phase_c helper tests passed")

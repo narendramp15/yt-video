@@ -120,6 +120,17 @@ Cost breakdown (monthly savings vs original pipeline):
     )
     args = parser.parse_args()
 
+    packaging_actions = sum(
+        bool(x) for x in (args.approve_packaging, args.reject_packaging, args.list_packaging)
+    )
+    if packaging_actions > 1:
+        parser.error(
+            "--approve-packaging, --reject-packaging, and --list-packaging "
+            "are mutually exclusive"
+        )
+    if args.variant is not None and not args.approve_packaging:
+        parser.error("--variant requires --approve-packaging")
+
     if args.list_voices:
         from services.tts_service import list_edge_voices
         print("\nAvailable Microsoft Edge TTS voices (English):\n")

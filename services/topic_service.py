@@ -457,7 +457,12 @@ def apply_niche_hard_filter(ranked: list[dict]) -> list[dict]:
         logger.info("NICHE_LOCK_ENABLED=false — skipping hard niche filter")
         return ranked
 
-    niche_set = set(niche)
+    niche_set: set[str] = set()
+    for kw in niche:
+        niche_set |= _tokenize(kw)
+    if not niche_set:
+        return ranked
+
     kept: list[dict] = []
     for item in ranked:
         hay = f"{item.get('title', '')} {item.get('angle', '')}"
@@ -508,7 +513,10 @@ def rerank_topics(
     signals = raw_signals or []
     recent = recent_topics if recent_topics is not None else _recent_topic_titles()
     recent_tokens = [_tokenize(t) for t in recent if t]
-    niche = set(_niche_keywords())
+    niche_raw = _niche_keywords()
+    niche: set[str] = set()
+    for kw in niche_raw:
+        niche |= _tokenize(kw)
 
     adjusted: list[dict] = []
     for item in ranked:

@@ -487,7 +487,7 @@ def run_long_video(no_upload: bool = False) -> None:
                 )
                 logger.warning(
                     "PACKAGING GATE: public upload paused. Review variants then run:\n"
-                    "  python main.py --approve-packaging [--variant N]\n"
+                    "  python main.py --approve-packaging [--variant N]  # N is 0-based index\n"
                     "  python main.py --reject-packaging   # force private\n"
                     "Then re-run: python main.py"
                 )
@@ -565,16 +565,19 @@ def run_long_video(no_upload: bool = False) -> None:
                 comment = f"{comment}\n\n{up_next}"
             post_pinned_comment(video_id, comment)
 
-            # Phase C: add long video to format playlist (skip Shorts)
-            try:
-                playlist_id = ensure_playlist(
-                    format_spec.playlist_title,
-                    description=f"Series: {format_spec.name}",
-                )
-                if playlist_id:
-                    add_video_to_playlist(playlist_id, video_id)
-            except Exception as exc:
-                logger.warning(f"Playlist add failed (non-fatal): {exc}")
+            # Phase C: add long video to format playlist (public only; skip Shorts)
+            if privacy == "public":
+                try:
+                    playlist_id = ensure_playlist(
+                        format_spec.playlist_title,
+                        description=f"Series: {format_spec.name}",
+                    )
+                    if playlist_id:
+                        add_video_to_playlist(playlist_id, video_id)
+                except Exception as exc:
+                    logger.warning(f"Playlist add failed (non-fatal): {exc}")
+            else:
+                logger.info("Skipping playlist add — upload is not public")
 
             post_video_update(
                 title=publish_title,
