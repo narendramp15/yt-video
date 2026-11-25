@@ -5,6 +5,8 @@ Usage:
   python main.py              # run pipeline (resumes from checkpoint)
   python main.py --restart    # force full re-run from scratch
   python main.py --list-voices  # print all available Edge TTS voices
+  python main.py --approve-packaging [--variant N]
+  python main.py --reject-packaging
 
 Environment setup:
   cp env.example .env         # fill in your API keys
@@ -31,6 +33,30 @@ os.makedirs(os.path.join(_HERE, "output"), exist_ok=True)
 from logger import logger  # noqa: E402
 from services.checkpoint_service import reset_today  # noqa: E402
 from workflows.long_video import run_long_video  # noqa: E402
+
+
+def _print_packaging_pending() -> None:
+    from services.packaging_service import load_packaging_pending
+
+    pending = load_packaging_pending()
+    if not pending:
+        print("No packaging pending. Run the pipeline with PACKAGING_REQUIRE_APPROVAL=true first.")
+        return
+    print(f"Topic: {pending.get('topic')}")
+    print(f"Angle: {pending.get('angle')}")
+    print(f"Format: {pending.get('format_id')}")
+    print(f"Approved: {pending.get('approved')}  force_private={pending.get('force_private')}")
+    winner = pending.get("winner") or {}
+    print(
+        f"Current winner: {winner.get('variant_id')} "
+        f"'{winner.get('title')}' hook='{winner.get('hook')}'"
+    )
+    for i, v in enumerate(pending.get("variants") or []):
+        marker = " ← winner" if v.get("variant_id") == winner.get("variant_id") else ""
+        print(
+            f"  [{i}] {v.get('variant_id')} score={v.get('score')} "
+            f"title='{v.get('title')}' hook='{v.get('hook')}'{marker}"
+        )
 
 
 def main() -> None:
@@ -71,12 +97,65 @@ Cost breakdown (monthly savings vs original pipeline):
         action="store_true",
         help="Run the full pipeline (Phases 1–4) but skip the YouTube upload step (Phase 5).",
     )
+    parser.add_argument(
+        "--approve-packaging",
+        action="store_true",
+        help="Approve pending packaging for public upload (Phase C CLI gate).",
+    )
+    parser.add_argument(
+        "--reject-packaging",
+        action="store_true",
+        help="Reject packaging and force this run to upload as private.",
+    )
+    parser.add_argument(
+        "--variant",
+        type=int,
+        default=None,
+        help="0-based packaging variant index to approve (with --approve-packaging).",
+    )
+    parser.add_argument(
+        "--list-packaging",
+        action="store_true",
+        help="Print pending packaging variants and exit.",
+    )
     args = parser.parse_args()
+
+    packaging_actions = sum(
+        bool(x) for x in (args.approve_packaging, args.reject_packaging, args.list_packaging)
+    )
+    if packaging_actions > 1:
+        parser.error(
+            "--approve-packaging, --reject-packaging, and --list-packaging "
+            "are mutually exclusive"
+        )
+    if args.variant is not None and not args.approve_packaging:
+        parser.error("--variant requires --approve-packaging")
 
     if args.list_voices:
         from services.tts_service import list_edge_voices
         print("\nAvailable Microsoft Edge TTS voices (English):\n")
         list_edge_voices()
+        return
+
+    if args.list_packaging:
+        _print_packaging_pending()
+        return
+
+    if args.approve_packaging:
+        from services.packaging_service import approve_packaging
+        _print_packaging_pending()
+        data = approve_packaging(variant_index=args.variant)
+        chosen = data.get("chosen") or {}
+        print(
+            f"\nApproved: {chosen.get('variant_id')} "
+            f"'{chosen.get('title')}' — re-run: python main.py"
+        )
+        return
+
+    if args.reject_packaging:
+        from services.packaging_service import reject_packaging
+        reject_packaging()
+        print("Packaging rejected — upload will be private. Re-run: python main.py")
         return
 
     if args.fetch_analytics:

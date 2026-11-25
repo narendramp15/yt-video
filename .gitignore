@@ -18,3 +18,10 @@ output/
 .vscode/
 .idea/
 *.swp
+
+# Runtime state and temp files
+state/
+*TEMP_MPY_*
+
+# Generated knowledge graph (graphify)
+graphify-out/

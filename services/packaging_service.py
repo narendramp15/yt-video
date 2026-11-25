@@ -312,3 +312,134 @@ No markdown, no commentary."""
         + ", ".join(f"{v['variant_id']}={v['score']}" for v in variants)
     )
     return variants
+
+
+# ---------------------------------------------------------------------------
+# Phase C — human packaging approval gate (CLI only)
+# ---------------------------------------------------------------------------
+
+def packaging_pending_path() -> str:
+    from config import config
+    return config.PACKAGING_PENDING_PATH
+
+
+def write_packaging_pending(
+    *,
+    topic: str,
+    angle: str,
+    variants: list[dict],
+    winner: dict,
+    slug: str = "",
+    format_id: str = "",
+) -> str:
+    """Write output/packaging_pending.json awaiting CLI approval."""
+    import json
+    from pathlib import Path
+    from datetime import date
+
+    path = Path(packaging_pending_path())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "date": date.today().isoformat(),
+        "topic": topic,
+        "angle": angle,
+        "format_id": format_id,
+        "slug": slug,
+        "variants": variants,
+        "winner": winner,
+        "chosen": winner,
+        "approved": False,
+        "force_private": False,
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    logger.info(f"Packaging pending written -> {path}")
+    return str(path)
+
+
+def load_packaging_pending() -> dict | None:
+    import json
+    from pathlib import Path
+
+    path = Path(packaging_pending_path())
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning(f"Failed to load packaging pending: {exc}")
+        return None
+
+
+def save_packaging_pending(data: dict) -> None:
+    import json
+    from pathlib import Path
+
+    path = Path(packaging_pending_path())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def approve_packaging(variant_index: int | None = None) -> dict:
+    """
+    Mark pending packaging as approved.
+    variant_index: 0-based index into variants; None keeps current winner/chosen.
+    """
+    data = load_packaging_pending()
+    if not data:
+        raise FileNotFoundError(
+            f"No pending packaging at {packaging_pending_path()}. "
+            "Run the pipeline first with PACKAGING_REQUIRE_APPROVAL=true."
+        )
+    variants = data.get("variants") or []
+    if variant_index is not None:
+        if variant_index < 0 or variant_index >= len(variants):
+            raise IndexError(
+                f"variant_index {variant_index} out of range "
+                f"(0..{max(len(variants) - 1, 0)})"
+            )
+        chosen = dict(variants[variant_index])
+        chosen["score"] = score_packaging_variant(chosen)
+        data["chosen"] = chosen
+        data["winner"] = chosen
+    else:
+        data["chosen"] = data.get("chosen") or data.get("winner") or {}
+    data["approved"] = True
+    data["force_private"] = False
+    save_packaging_pending(data)
+    logger.info(
+        f"Packaging approved: {data['chosen'].get('variant_id')} "
+        f"'{data['chosen'].get('title')}'"
+    )
+    return data
+
+
+def reject_packaging() -> dict:
+    """Force this run to upload as private."""
+    data = load_packaging_pending()
+    if not data:
+        raise FileNotFoundError(
+            f"No pending packaging at {packaging_pending_path()}. "
+            "Run the pipeline first with PACKAGING_REQUIRE_APPROVAL=true."
+        )
+    data["approved"] = True
+    data["force_private"] = True
+    save_packaging_pending(data)
+    logger.info("Packaging rejected — upload will be forced private")
+    return data
+
+
+def packaging_gate_status() -> dict:
+    """
+    Snapshot used by the orchestrator before public upload.
+    Keys: requires_gate, approved, force_private, chosen, pending
+    """
+    from config import config
+
+    pending = load_packaging_pending()
+    return {
+        "requires_gate": bool(config.PACKAGING_REQUIRE_APPROVAL),
+        "approved": bool(pending and pending.get("approved")),
+        "force_private": bool(pending and pending.get("force_private")),
+        "chosen": (pending or {}).get("chosen") or (pending or {}).get("winner") or {},
+        "pending": pending,
+    }

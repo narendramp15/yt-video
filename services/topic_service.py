@@ -413,6 +413,91 @@ def _niche_keywords() -> list[str]:
         return []
 
 
+def _configured_niche_keywords() -> list[str]:
+    """Explicit CHANNEL_PRIMARY_NICHE only (not analytics fallback)."""
+    from config import config
+    return list(config.CHANNEL_PRIMARY_NICHE or [])
+
+
+def niche_lock_prompt_note() -> str:
+    """Inject into topic + script prompts when niche lock is active."""
+    from config import config
+    niche = _configured_niche_keywords()
+    if not niche:
+        return ""
+    days = getattr(config, "NICHE_LOCK_DAYS", 30)
+    kw = ", ".join(niche)
+    return (
+        f"NICHE LOCK ({days}-day primary niche): stay inside [{kw}]. "
+        f"Frame every topic/angle through this niche. Drop off-niche digressions.\n"
+    )
+
+
+def apply_niche_hard_filter(ranked: list[dict]) -> list[dict]:
+    """
+    Phase C hard niche lock.
+
+    When CHANNEL_PRIMARY_NICHE is set and NICHE_LOCK_ENABLED:
+      drop topics with zero token overlap against niche keywords.
+    If every topic is filtered out: keep the top LLM-scored item and force
+    its angle toward the niche.
+    When niche keywords are empty: warn and skip hard filter.
+    """
+    from config import config
+
+    niche = _configured_niche_keywords()
+    if not niche:
+        logger.warning(
+            "CHANNEL_PRIMARY_NICHE is empty — niche hard lock skipped "
+            "(soft niche re-rank still uses analytics keywords when available)"
+        )
+        return ranked
+
+    if not getattr(config, "NICHE_LOCK_ENABLED", True):
+        logger.info("NICHE_LOCK_ENABLED=false — skipping hard niche filter")
+        return ranked
+
+    niche_set: set[str] = set()
+    for kw in niche:
+        niche_set |= _tokenize(kw)
+    if not niche_set:
+        return ranked
+
+    kept: list[dict] = []
+    for item in ranked:
+        hay = f"{item.get('title', '')} {item.get('angle', '')}"
+        tokens = _tokenize(hay)
+        if tokens & niche_set:
+            row = dict(item)
+            row["niche_match"] = True
+            kept.append(row)
+
+    if kept:
+        logger.info(
+            f"Niche hard filter: kept {len(kept)}/{len(ranked)} topics "
+            f"(niche={','.join(niche)})"
+        )
+        return kept
+
+    # Fallback: keep best original score, rewrite angle toward niche
+    if not ranked:
+        return ranked
+    best = dict(max(ranked, key=lambda x: float(x.get("score") or 0)))
+    niche_str = ", ".join(niche)
+    forced = (
+        f"Frame through {niche_str}: "
+        f"{best.get('angle') or best.get('title') or 'explain why it matters'}"
+    )
+    best["angle"] = forced
+    best["niche_match"] = False
+    best["niche_forced"] = True
+    logger.warning(
+        f"Niche hard filter removed all topics — keeping '{best.get('title')}' "
+        f"with forced niche angle"
+    )
+    return [best]
+
+
 def rerank_topics(
     ranked: list[dict],
     raw_signals: list[str] | None = None,
@@ -428,7 +513,10 @@ def rerank_topics(
     signals = raw_signals or []
     recent = recent_topics if recent_topics is not None else _recent_topic_titles()
     recent_tokens = [_tokenize(t) for t in recent if t]
-    niche = set(_niche_keywords())
+    niche_raw = _niche_keywords()
+    niche: set[str] = set()
+    for kw in niche_raw:
+        niche |= _tokenize(kw)
 
     adjusted: list[dict] = []
     for item in ranked:
@@ -520,6 +608,7 @@ def filter_and_score_topics(
             analytics_block = get_topic_prompt_injection()
         except Exception:
             pass
+        niche_block = niche_lock_prompt_note()
 
         prompt = f"""You are a YouTube trend analyst for an Indian audience (18–35, English-speaking).
 
@@ -527,7 +616,7 @@ Given these {min(len(raw_topics), 30)} trending topics, do the following:
 1. FILTER OUT anything political, controversial, religious, or potentially sensitive.
 2. SCORE the remaining topics 1–10 by YouTube virality potential for India.
 3. Return the top {pool_n} topics as a JSON array.
-{analytics_block}
+{analytics_block}{niche_block}
 Topics:
 {numbered}
 
@@ -568,6 +657,9 @@ Return ONLY this JSON (no explanation, no markdown):
     if not ranked:
         ranked = [{"title": t, "angle": "", "audience": "general", "score": 0.0}
                   for t in raw_topics[: max(top_n * 3, top_n)]]
+
+    # Phase C: hard niche lock before soft re-rank
+    ranked = apply_niche_hard_filter(ranked)
 
     return rerank_topics(ranked, raw_signals=raw_topics, top_n=top_n)
 

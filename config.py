@@ -25,6 +25,9 @@ Optional .env keys:
   BURN_CAPTIONS_ENABLED — burn Whisper captions into long-form MP4 (default: true)
   CHANNEL_PRIMARY_NICHE — comma keywords for topic niche fit (optional)
   PACKAGING_VARIANTS    — title/thumb A/B variant count (default: 3)
+  NICHE_LOCK_ENABLED    — hard-filter topics to niche keywords (default: true)
+  NICHE_LOCK_DAYS       — niche commitment window for notes (default: 30)
+  PACKAGING_REQUIRE_APPROVAL — CLI gate before public upload (default: false)
 """
 
 import os
@@ -95,6 +98,14 @@ class Config:
     ]
     # Phase B — how many title/hook packages to generate for heuristic A/B.
     PACKAGING_VARIANTS = max(1, int(os.getenv("PACKAGING_VARIANTS", "3")))
+
+    # Phase C — hard niche lock when CHANNEL_PRIMARY_NICHE is non-empty.
+    NICHE_LOCK_ENABLED = _env_flag("NICHE_LOCK_ENABLED", True)
+    NICHE_LOCK_DAYS = max(1, int(os.getenv("NICHE_LOCK_DAYS", "30")))
+    # Phase C — pause public uploads until CLI packaging approval.
+    PACKAGING_REQUIRE_APPROVAL = _env_flag("PACKAGING_REQUIRE_APPROVAL", False)
+    PACKAGING_PENDING_PATH = str(_PROJECT_ROOT / "output" / "packaging_pending.json")
+    PLAYLISTS_STATE_PATH = str(STATE_DIR / "playlists.json")
 
     # ── Script generation ─────────────────────────────────────────────────
     # gpt-4o-mini (~$0.06/mo) | deepseek-chat (~$0.01/mo) | deepseek-reasoner
