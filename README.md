@@ -25,30 +25,23 @@ Automated faceless YouTube channel pipeline that turns **trending topics** into 
 uv sync
 
 # 2. Configure environment
-cp yt_video/env.example .env
+cp env.example .env
 # Edit .env — only OPENAI_API_KEY + YOUTUBE_CLIENT_SECRET are required
 
 # 3. Run the pipeline
-uv run python yt_video/main.py
+uv run python main.py
 
 # 4. Force a full re-run (clear today's checkpoint)
-uv run python yt_video/main.py --restart
+uv run python main.py --restart
 
 # 5. List all available Edge TTS voices
-uv run python yt_video/main.py --list-voices
+uv run python main.py --list-voices
 
 # 6. Fetch YouTube Analytics 48h+ after upload (improves next run)
-uv run python yt_video/main.py --fetch-analytics
-```
-
-Or run directly from inside `yt_video/`:
-
-```bash
-cd yt_video
-uv run python main.py
-uv run python main.py --restart
 uv run python main.py --fetch-analytics
 ```
+
+All commands run from the repository root.
 
 ---
 
@@ -144,7 +137,7 @@ Python 3.11/3.12 environment with Torch installed.
 ## Project Structure
 
 ```
-yt_video/
+yt-video/
 ├── main.py                              # CLI: --restart, --fetch-analytics, --list-voices
 ├── config.py                            # All config via .env (absolute path, override=True)
 ├── logger.py                            # Structured logger -> output/pipeline.log
@@ -206,7 +199,7 @@ Memory file: `output/yt_analytics_memory.json`
 
 ```bash
 # Run 48+ hours after any upload
-uv run python yt_video/main.py --fetch-analytics
+uv run python main.py --fetch-analytics
 ```
 
 ---
@@ -252,7 +245,7 @@ EDGE_TTS_VOICE=en-IN-PrabhatNeural  # male Indian English
 ```
 
 ```bash
-uv run python yt_video/main.py --list-voices   # see all 300+ voices
+uv run python main.py --list-voices   # see all 300+ voices
 ```
 
 ### Pollinations.ai (replaces DALL-E / Flux)

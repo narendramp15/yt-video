@@ -1,0 +1,62 @@
+[project]
+name = "yt-video"
+version = "0.1.0"
+description = "100% free trend-driven YouTube pipeline (Edge TTS + Pollinations + local FFmpeg)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # Core AI / LLM
+    "openai>=1.30.0",
+    "python-dotenv>=1.0.0",
+
+    # FREE TTS — Microsoft Edge TTS
+    "edge-tts>=6.1.9",
+    "pydub>=0.25.1",
+
+    # FREE trend signals
+    "pytrends>=4.9.2",
+    "beautifulsoup4>=4.12.0",
+
+    # Market data / charts
+    "yfinance>=0.2.40",
+    "mplfinance>=0.12.10b0",
+    "matplotlib>=3.8.0",
+    "pandas>=2.0.0",
+
+    # Video assembly (local MoviePy + FFmpeg)
+    "moviepy>=2.0.0",
+    "Pillow>=10.0.0",
+    "numpy>=1.26.0",
+
+    # YouTube upload
+    "google-api-python-client>=2.0.0",
+    "google-auth-oauthlib>=1.0.0",
+    "google-auth>=2.0.0",
+
+    # HTTP / X posting
+    "requests>=2.31.0",
+    "requests-oauthlib>=2.0.0",
+]
+
+[project.optional-dependencies]
+# Local Whisper (free). Some platforms need Python ≤3.12 for ctranslate2.
+whisper = [
+    "faster-whisper>=1.0.0",
+]
+# Local CLIP image-vs-scene verification (CPU).
+clip = [
+    "torch>=2.0.0",
+    "transformers>=4.40.0",
+]
+all = [
+    "faster-whisper>=1.0.0",
+    "torch>=2.0.0",
+    "transformers>=4.40.0",
+]
+
+[dependency-groups]
+dev = []
+
+[tool.uv]
+# Application project (flat layout: main.py / config.py / services/) — not published as a package.
+package = false
