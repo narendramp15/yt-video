@@ -4,7 +4,6 @@ from __future__ import annotations
 from yt_video.domain.packaging import fallback_variants
 from yt_video.logging import get_logger
 from yt_video.models import (
-    ContentAngle,
     PackagingVariant,
     PackagingVariants,
     RankedTopics,
@@ -28,17 +27,19 @@ def rank_topics(
     analytics_note: str,
     top_n: int = 3,
 ) -> list[Topic]:
-    """Filter sensitive topics and score the rest; may return an empty list."""
+    """Filter sensitive topics and score the rest; may return an empty list.
+
+    Asks for a wider pool (v1's ``pool_n``) so the deterministic rerank and niche
+    filter have room; the caller truncates to ``top_n``. ``recent_titles`` is
+    unused by the prompt (novelty lives in the rerank); kept for a stable signature.
+    """
     shown = signals[:30]
     numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(shown))
-    if recent_titles:
-        numbered += "\n\nRECENT VIDEO TITLES (avoid repeating these):\n" + "\n".join(
-            f"- {t}" for t in recent_titles
-        )
+    pool_n = min(max(top_n * 3, top_n), 12)
     system, prompt = render_prompt(
         "rank_topics",
         count=str(len(shown)),
-        top_n=str(top_n),
+        pool_n=str(pool_n),
         topics=numbered,
         niche_note=niche_note,
         analytics_note=analytics_note,
@@ -57,6 +58,7 @@ def write_script(
     format_block: str,
     tts_note: str,
     analytics_note: str,
+    niche_note: str = "",
 ) -> ScriptOutput:
     trend_block = ""
     if trend_signals:
@@ -70,6 +72,7 @@ def write_script(
         angle_block=f"\nSUGGESTED ANGLE: {angle}\n" if angle else "",
         trend_block=trend_block,
         format_block=f"\n{format_block}\n" if format_block else "",
+        niche_note=niche_note,
         analytics_note=analytics_note,
         tts_note=tts_note,
     )
@@ -150,11 +153,3 @@ def refine_scene_prompts(
         if label not in refined and initial.get(label):
             refined[label] = initial[label]
     return refined
-
-
-def content_angle(router: LLMRouter, topic: str) -> str:
-    system, prompt = render_prompt("content_angle", topic=topic)
-    req = LLMRequest("content_angle", system, prompt, ContentAngle, "light")
-    result = router.complete(req, stage="rank_topics")
-    assert isinstance(result.parsed, ContentAngle)
-    return result.parsed.angle

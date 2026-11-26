@@ -51,6 +51,21 @@ def test_rank_topics_returns_list_and_empty() -> None:
     assert llm_tasks.rank_topics(router, ["x"], [], "", "") == []
 
 
+def test_rank_topics_requests_v1_pool_size() -> None:
+    router, fake = _router({"rank_topics": {"topics": []}})
+    llm_tasks.rank_topics(router, ["x"], [], "", "", top_n=3)
+    assert "top 9 topics" in fake.requests[0].prompt
+    router, fake = _router({"rank_topics": {"topics": []}})
+    llm_tasks.rank_topics(router, ["x"], [], "", "", top_n=6)
+    assert "top 12 topics" in fake.requests[0].prompt
+
+
+def test_write_script_injects_niche_note() -> None:
+    router, fake = _router({"write_script": make_script()})
+    llm_tasks.write_script(router, "T", "", [], "", "", "", niche_note="NICHE-LOCK-X")
+    assert "NICHE-LOCK-X" in fake.requests[0].prompt
+
+
 def test_packaging_returns_variants() -> None:
     v = [{"variant_id": "v1", "title": "T", "hook": "BIG NEWS"}]
     router, _ = _router({"packaging_variants": {"variants": v}})
@@ -91,12 +106,6 @@ def test_refine_no_labels_skips_call() -> None:
     router, fake = _router({})
     assert llm_tasks.refine_scene_prompts(router, "t", None, [], {}, {}) == {}
     assert fake.requests == []
-
-
-def test_content_angle_returns_string() -> None:
-    router, fake = _router({"content_angle": {"angle": "Daily Trending"}})
-    assert llm_tasks.content_angle(router, "topic") == "Daily Trending"
-    assert fake.requests[0].tier == "light"
 
 
 def test_llm_error_type_is_raised_by_router() -> None:

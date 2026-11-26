@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 
 from yt_video.logging import get_logger
 from yt_video.models import Topic
@@ -133,3 +134,13 @@ def rerank_topics(
         f"Topic re-rank: top='{out[0][0].title}' score={out[0][0].score} (delta={out[0][1]})"
     )
     return [row for row, _ in out]
+
+
+def content_angle(topic: str, today: date) -> str:
+    """Day-of-week framing: Monday preview, Friday deep-dive, else daily trending."""
+    weekday = today.weekday()  # 0=Monday ... 6=Sunday
+    if weekday == 0:
+        return "Weekly Preview"
+    if weekday == 4:
+        return "Weekend Deep-Dive"
+    return "Daily Trending"

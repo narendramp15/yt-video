@@ -1,5 +1,9 @@
 """Topic re-rank, niche hard filter, tokenizer (ported from test_phase_b/c_helpers.py)."""
 
+from datetime import date
+
+import pytest
+
 from yt_video.domain.topics import apply_niche_hard_filter, rerank_topics, tokenize
 from yt_video.models import Topic
 
@@ -71,3 +75,18 @@ def test_tokenize_keeps_short_niche_tokens():
     tokens = tokenize("AI startup in India")
     assert "ai" in tokens
     assert "startup" in tokens
+
+
+@pytest.mark.parametrize(
+    "day,expected",
+    [
+        (date(2026, 11, 23), "Weekly Preview"),   # Monday
+        (date(2026, 11, 27), "Weekend Deep-Dive"),  # Friday
+        (date(2026, 11, 25), "Daily Trending"),   # Wednesday
+        (date(2026, 11, 29), "Daily Trending"),   # Sunday
+    ],
+)
+def test_content_angle_by_weekday(day: date, expected: str) -> None:
+    from yt_video.domain.topics import content_angle
+
+    assert content_angle("any", day) == expected

@@ -4,7 +4,7 @@ curious, specific, and a little imperfect. Never sound like a corporate AI expla
 
 # prompt
 VIDEO TOPIC: $topic
-$angle_block$trend_block$format_block
+$angle_block$trend_block$format_block$niche_note
 CHANNEL STYLE: A sharp friend walking you through something interesting. Warm, direct, lightly witty.
 Avoid polished brochure tone. Prefer concrete details over abstract hype.
 TARGET AUDIENCE: India, 18–35, English-speaking, interested in trending real-world topics.
