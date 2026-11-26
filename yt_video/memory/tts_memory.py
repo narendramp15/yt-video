@@ -129,7 +129,7 @@ class TTSMemory:
 
     def _load(self) -> dict:
         data = read_json(self.path)
-        if isinstance(data, dict):
+        if data is not None:
             return data
         return {
             "runs": 0,

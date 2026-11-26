@@ -461,7 +461,7 @@ class AnalyticsMemory:
 
     def _load(self) -> dict:
         data = read_json(self.memory_path)
-        if isinstance(data, dict):
+        if data is not None:
             return data
         return {
             "videos": [],
@@ -545,8 +545,8 @@ class AnalyticsMemory:
             "ctr_48h": None,
         }
         history: list[dict] = []
-        existing = read_json(self.analytics_log_path)
-        if isinstance(existing, list):
+        existing = read_json(self.analytics_log_path, expect=list)
+        if existing is not None:
             history = existing
         history.append(record)
         write_json_atomic(self.analytics_log_path, history)

@@ -214,3 +214,54 @@ def test_no_writes_outside_given_paths(tmp_path, monkeypatch):
 
     assert os.listdir(cwd) == []
     assert not list(store.glob("*.tmp"))
+
+
+def test_truncated_json_is_backed_up_and_default_returned(tmp_path, caplog):
+    path = tmp_path / "tts.json"
+    raw = b'{"runs": 4, "style_no'
+    path.write_bytes(raw)
+    with caplog.at_level("WARNING"):
+        assert TTSMemory(path).prompt_injection() == ""
+    backups = list(tmp_path.glob("tts.json.corrupt-*"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == raw
+    assert path.read_bytes() == raw
+    assert "copied to" in caplog.text
+
+
+def test_non_dict_json_is_backed_up(tmp_path):
+    path = tmp_path / "m.json"
+    path.write_text("[1, 2]", encoding="utf-8")
+    mem = AnalyticsMemory(path, tmp_path / "log.json", None)
+    assert mem.recent_public_video_ids() == []
+    assert len(list(tmp_path.glob("m.json.corrupt-*"))) == 1
+
+
+def test_permission_error_on_read_raises(tmp_path, monkeypatch):
+    import builtins
+
+    import pytest
+
+    path = tmp_path / "tts.json"
+    path.write_text("{}", encoding="utf-8")
+    real_open = builtins.open
+
+    def fake_open(file, *a, **k):
+        if str(file) == str(path):
+            raise PermissionError("locked")
+        return real_open(file, *a, **k)
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+    with pytest.raises(PermissionError):
+        TTSMemory(path).pronunciation_corrections()
+
+
+def test_write_failure_removes_tmp(tmp_path):
+    import pytest
+
+    from yt_video.memory._io import write_json_atomic
+
+    path = tmp_path / "x.json"
+    with pytest.raises(TypeError):
+        write_json_atomic(path, {"bad": object()})
+    assert list(tmp_path.iterdir()) == []
