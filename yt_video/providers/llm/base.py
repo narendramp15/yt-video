@@ -40,9 +40,23 @@ class LLMResult(RawCompletion):
 
 
 class ProviderError(Exception):
-    def __init__(self, kind: ErrorKind, message: str = "") -> None:
+    def __init__(
+        self,
+        kind: ErrorKind,
+        message: str = "",
+        *,
+        cost_usd: float = 0.0,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        model: str | None = None,
+    ) -> None:
         super().__init__(message or kind)
         self.kind: ErrorKind = kind
+        # Billed usage of a call that failed after the API responded.
+        self.cost_usd = cost_usd
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.model = model
 
 
 class LLMError(Exception):

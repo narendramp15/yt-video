@@ -64,6 +64,23 @@ def test_openai_invalid_output():
     assert ei.value.kind == "invalid_output"
 
 
+def test_invalid_output_carries_billed_cost():
+    with pytest.raises(ProviderError) as ei:
+        _provider(_Stub(_resp("not json"))).complete(_req())
+    e = ei.value
+    assert e.cost_usd == estimate_openai_cost("gpt-6-luna", 10, 5, PRICING)
+    assert (e.input_tokens, e.output_tokens, e.model) == (10, 5, "gpt-6-luna")
+
+
+def test_missing_pricing_blocks_call():
+    stub = _Stub(_resp())
+    p = OpenAIProvider("key", "other-model", PRICING, client_factory=lambda **_: stub)
+    with pytest.raises(ProviderError) as ei:
+        p.complete(_req())
+    assert ei.value.kind == "unavailable"
+    assert stub.kw is None
+
+
 def test_openai_unavailable_without_key():
     p = OpenAIProvider(None, "gpt-6-luna", PRICING)
     assert not p.available()
