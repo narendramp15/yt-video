@@ -101,6 +101,25 @@ def test_overload_and_long_context_are_exit_not_usage_limit(msg):
     assert e.value.kind == "exit"
 
 
+def test_long_context_text_with_429_rate_limit_is_exit():
+    env = {
+        "is_error": True,
+        "result": "Extra usage is required for long context",
+        "api_error_status": 429,
+        "api_error_type": "rate_limit_error",
+    }
+    with pytest.raises(ProviderError) as e:
+        parse_claude_envelope(json.dumps(env), "", 1)
+    assert e.value.kind == "exit"
+
+
+def test_status_429_with_neutral_text_is_usage_limit():
+    env = {"is_error": True, "result": "Request failed", "api_error_status": 429}
+    with pytest.raises(ProviderError) as e:
+        parse_claude_envelope(json.dumps(env), "", 1)
+    assert e.value.kind == "usage_limit"
+
+
 def test_is_error_with_returncode_zero_still_errors_and_ignores_subtype():
     env = {"is_error": True, "result": "boom", "subtype": "success"}
     with pytest.raises(ProviderError) as e:

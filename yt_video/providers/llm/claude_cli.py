@@ -27,6 +27,11 @@ USAGE_LIMIT_PATTERNS: tuple[str, ...] = (
     r"credit balance is too low",
     r"rate_limit",
 )
+NOT_USAGE_LIMIT_PATTERNS: tuple[str, ...] = (
+    r"overloaded",
+    r"extra usage is required for long context",
+)
+_NOT_LIMIT_RE = re.compile("|".join(NOT_USAGE_LIMIT_PATTERNS), re.IGNORECASE)
 _LIMIT_RE = re.compile("|".join(USAGE_LIMIT_PATTERNS), re.IGNORECASE)
 _LIMIT_STATUSES = {429, 402}
 _EXCERPT = 300
@@ -90,7 +95,9 @@ def parse_claude_envelope(stdout: str, stderr: str, returncode: int) -> RawCompl
 
     if env.get("is_error") is True or returncode != 0:
         haystack = f"{text}\n{stdout}\n{stderr}"
-        limited = bool(_LIMIT_RE.search(haystack)) or env.get("api_error_status") in _LIMIT_STATUSES
+        limited = not _NOT_LIMIT_RE.search(haystack) and (
+            bool(_LIMIT_RE.search(haystack)) or env.get("api_error_status") in _LIMIT_STATUSES
+        )
         raise ProviderError(
             "usage_limit" if limited else "exit",
             f"claude error (rc={returncode}): {_excerpt(text or stderr or stdout)}",
