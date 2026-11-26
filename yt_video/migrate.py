@@ -42,7 +42,13 @@ def _is_valid(name: str, path: Path) -> bool:
         if name.endswith(".db"):
             with path.open("rb") as fh:
                 return fh.read(16) == _SQLITE_MAGIC
-        json.loads(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+        if name == "review_log.json":  # v1 wrote newline-delimited JSON
+            for line in text.splitlines():
+                if line.strip():
+                    json.loads(line)
+            return True
+        json.loads(text)
         return True
     except (OSError, ValueError):
         return False

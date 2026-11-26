@@ -129,3 +129,19 @@ def test_db_copy_includes_wal_rows(tmp_path):
     finally:
         out.close()
     assert list(state.glob("*.tmp")) == []
+
+
+def test_ndjson_review_log_is_copied(tmp_path):
+    repo, state = _dirs(tmp_path)
+    lines = [json.dumps({"topic": f"t{i}", "score": i, "review": "ok"}) for i in range(3)]
+    (repo / "output" / "review_log.json").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    report = migrate_state(state, repo)
+    assert report.copied == ["review_log.json"]
+    assert report.skipped_invalid == []
+    assert (state / "review_log.json").read_text(encoding="utf-8").count("\n") == 3
+
+
+def test_empty_review_log_is_valid(tmp_path):
+    repo, state = _dirs(tmp_path)
+    (repo / "output" / "review_log.json").write_text("\n\n", encoding="utf-8")
+    assert migrate_state(state, repo).copied == ["review_log.json"]

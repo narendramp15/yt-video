@@ -1,6 +1,7 @@
 """Tests for the text stages (discover -> review) using fakes only."""
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
@@ -201,3 +202,27 @@ def test_pick_format_receives_ctx_today(env, monkeypatch):
     monkeypatch.setattr(text, "pick_format", spy)
     _run_all(env.ctx)
     assert seen["today"] == TODAY
+
+
+def test_review_appends_ndjson_log_without_overwriting(env):
+    log_path = env.ctx.settings.state_dir / "review_log.json"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text('{"topic": "old", "score": 1, "review": "x"}\n', encoding="utf-8")
+    _run_all(env.ctx)
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2 and json.loads(lines[0])["topic"] == "old"
+    assert json.loads(lines[1]) == {
+        "topic": "AI chip boom", "score": 88, "review": "good", "safety": "Yes",
+    }
+
+
+def test_review_log_failure_is_non_fatal(env, monkeypatch):
+    real_open = open
+
+    def bad_open(path, *a, **k):
+        if str(path).endswith("review_log.json"):
+            raise OSError("locked")
+        return real_open(path, *a, **k)
+
+    monkeypatch.setattr("builtins.open", bad_open)
+    assert _run_all(env.ctx) == "done"

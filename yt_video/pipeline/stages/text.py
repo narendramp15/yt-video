@@ -5,6 +5,8 @@ JSON-serializable data under its own name in ``run.json``.
 """
 from __future__ import annotations
 
+import json
+
 from pydantic import BaseModel
 
 from yt_video import llm_tasks
@@ -20,7 +22,7 @@ from yt_video.domain.topics import (
 from yt_video.integrations.trends import fetch_trending_topics
 from yt_video.logging import get_logger
 from yt_video.memory._io import read_json, write_json_atomic
-from yt_video.models import PackagingVariant, ScoredVariant, ScriptOutput, Topic
+from yt_video.models import PackagingVariant, Review, ScoredVariant, ScriptOutput, Topic
 from yt_video.pipeline.context import RunContext
 from yt_video.pipeline.runner import Stage, StageOutcome
 from yt_video.providers.llm.base import LLMError
@@ -228,8 +230,28 @@ class ReviewStage:
         script = ctx.load("write_script", ScriptOutput)
         result = llm_tasks.review(ctx.router, script.long_script)
         log.info("review score: %d/100 safety=%s", result.score, result.safety)
+        topic = ctx.load("rank_topics", RankData).selected.title
+        self._append_log(ctx, topic, result)
         ctx.run.mark_done(self.name, result.model_dump())
         return None
+
+
+    @staticmethod
+    def _append_log(ctx: RunContext, topic: str, result: Review) -> None:
+        """Append one NDJSON line to state/review_log.json (v1 format); non-fatal."""
+        line = {
+            "topic": topic,
+            "score": result.score,
+            "review": result.notes,
+            "safety": result.safety,
+        }
+        try:
+            path = ctx.settings.state_dir / "review_log.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(line, ensure_ascii=False) + "\n")
+        except OSError as exc:
+            log.warning("review log write failed (non-fatal): %s", exc)
 
 
 TEXT_STAGES: list[type[Stage]] = [
