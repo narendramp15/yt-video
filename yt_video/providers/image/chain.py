@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import shutil
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 from yt_video.costs import CostLedger
@@ -12,20 +15,45 @@ from yt_video.providers.image.cloudflare import CloudflareProvider
 from yt_video.providers.image.openai_image import OpenAIImageProvider
 from yt_video.providers.image.placeholder import PlaceholderProvider
 from yt_video.providers.image.pollinations import PollinationsProvider
+from yt_video.providers.image.validate import validate_image
 from yt_video.settings import Settings
 
 logger = logging.getLogger(__name__)
 
 
 class ImageChain:
-    def __init__(self, providers: list[ImageProvider], cache_dir: Path) -> None:
+    def __init__(
+        self,
+        providers: list[ImageProvider],
+        cache_dir: Path,
+        retries: int = 3,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self.providers = providers
         self.cache_dir = Path(cache_dir)
+        self.retries = retries
+        self._sleep = sleep
 
     @staticmethod
     def _key(provider: ImageProvider, prompt: str, width: int, height: int, seed: int) -> str:
         raw = f"{provider.name}|{provider.model}|{prompt}|{width}x{height}|{seed}"
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+    def _fetch(self, provider: ImageProvider, prompt: str, width: int, height: int, seed: int) -> bytes | None:
+        """Call one provider with retry + backoff (v1: 3 attempts, 5s * attempt)."""
+        check = getattr(provider, "validated", True)
+        for attempt in range(1, self.retries + 1):
+            data = provider.generate(prompt, width, height, seed)
+            if data:
+                reason = validate_image(data, width, height) if check else None
+                if reason is None:
+                    return data
+                logger.warning("%s attempt %d/%d: validation failed: %s", provider.name, attempt, self.retries, reason)
+            else:
+                logger.warning("%s attempt %d/%d: no image returned", provider.name, attempt, self.retries)
+            if attempt < self.retries:
+                self._sleep(5 * attempt)
+        return None
 
     def generate(self, prompt: str, width: int, height: int, seed: int, out_path: Path) -> ImageResult:
         out_path = Path(out_path)
@@ -36,15 +64,22 @@ class ImageChain:
             cacheable = getattr(provider, "cacheable", True)
             cache_file = self.cache_dir / f"{self._key(provider, prompt, width, height, seed)}.img"
             if cacheable and cache_file.is_file():
-                shutil.copyfile(cache_file, out_path)
-                return ImageResult(out_path, provider.name, True)
-            data = provider.generate(prompt, width, height, seed)
-            if not data:
-                logger.warning("image provider %s returned nothing; trying next", provider.name)
+                cached = cache_file.read_bytes()
+                reason = validate_image(cached, width, height)
+                if reason is None:
+                    shutil.copyfile(cache_file, out_path)
+                    return ImageResult(out_path, provider.name, True)
+                logger.warning("discarding invalid cache entry %s: %s", cache_file.name, reason)
+                cache_file.unlink(missing_ok=True)
+            data = self._fetch(provider, prompt, width, height, seed)
+            if data is None:
+                logger.warning("image provider %s failed; trying next", provider.name)
                 continue
             if cacheable:
                 self.cache_dir.mkdir(parents=True, exist_ok=True)
-                cache_file.write_bytes(data)
+                tmp = cache_file.with_suffix(".tmp")
+                tmp.write_bytes(data)
+                os.replace(tmp, cache_file)
             out_path.write_bytes(data)
             return ImageResult(out_path, provider.name, False)
         raise RuntimeError("all image providers failed or were unavailable")

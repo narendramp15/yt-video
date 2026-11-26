@@ -1,11 +1,8 @@
 """Deterministic in-memory image provider for tests."""
 from __future__ import annotations
 
-import base64
-
-_PNG_1X1 = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
-)
+import io
+import random
 
 
 class FakeImageProvider:
@@ -20,5 +17,14 @@ class FakeImageProvider:
         return True
 
     def generate(self, prompt: str, width: int, height: int, seed: int) -> bytes | None:
+        """Seeded noise PNG at the requested size, so it passes validate_image."""
         self.calls += 1
-        return None if self.fail else _PNG_1X1
+        if self.fail:
+            return None
+        from PIL import Image
+
+        rng = random.Random(seed)
+        img = Image.frombytes("RGB", (width, height), rng.randbytes(width * height * 3))
+        out = io.BytesIO()
+        img.save(out, "PNG")
+        return out.getvalue()

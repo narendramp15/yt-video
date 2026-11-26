@@ -34,27 +34,27 @@ class _Resp:
 def test_chain_skips_unavailable_and_falls_through(tmp_path):
     cf = CloudflareProvider(None, None)
     poll = FakeImageProvider(name="pollinations", fail=True)
-    chain = ImageChain([cf, poll, PlaceholderProvider()], tmp_path / "cache")
+    chain = ImageChain([cf, poll, PlaceholderProvider()], tmp_path / "cache", sleep=lambda s: None)
     result = chain.generate("a bull", 320, 180, 1, tmp_path / "out" / "img.jpg")
     assert result.provider == "placeholder"
     assert not result.cached
-    assert poll.calls == 1
+    assert poll.calls == 3
     assert Image.open(result.path).size == (320, 180)
     assert not (tmp_path / "cache").exists() or not list((tmp_path / "cache").iterdir())
 
 
 def test_chain_cache_hit(tmp_path):
     fake = FakeImageProvider()
-    chain = ImageChain([fake], tmp_path / "cache")
-    first = chain.generate("p", 10, 10, 3, tmp_path / "a.png")
-    second = chain.generate("p", 10, 10, 3, tmp_path / "b.png")
+    chain = ImageChain([fake], tmp_path / "cache", sleep=lambda s: None)
+    first = chain.generate("p", 64, 64, 3, tmp_path / "a.png")
+    second = chain.generate("p", 64, 64, 3, tmp_path / "b.png")
     assert not first.cached and second.cached
     assert fake.calls == 1
     assert (tmp_path / "b.png").read_bytes() == (tmp_path / "a.png").read_bytes()
 
 
 def test_chain_raises_when_all_fail(tmp_path):
-    chain = ImageChain([FakeImageProvider(fail=True)], tmp_path / "cache")
+    chain = ImageChain([FakeImageProvider(fail=True)], tmp_path / "cache", sleep=lambda s: None)
     with pytest.raises(RuntimeError):
         chain.generate("p", 10, 10, 1, tmp_path / "x.png")
 
@@ -145,3 +145,63 @@ def test_openai_image_records_cost(tmp_path, monkeypatch):
 
 def test_openai_image_unavailable_without_key():
     assert not OpenAIImageProvider(None, "gpt-image-1", "low").available()
+
+
+class _Scripted:
+    """Provider returning a scripted sequence of byte payloads."""
+
+    name, model = "scripted", "m"
+
+    def __init__(self, outputs):
+        self.outputs = list(outputs)
+        self.calls = 0
+
+    def available(self):
+        return True
+
+    def generate(self, prompt, width, height, seed):
+        self.calls += 1
+        return self.outputs.pop(0) if len(self.outputs) > 1 else self.outputs[0]
+
+
+def _uniform_png():
+    buf = io.BytesIO()
+    Image.new("RGB", (128, 128), (0, 0, 0)).save(buf, "PNG")
+    return buf.getvalue() + bytes(4096)  # padded past the min-bytes check
+
+
+def _good_png(w=64, h=64):
+    return FakeImageProvider().generate("p", w, h, 1)
+
+
+@pytest.mark.parametrize("bad", [b"tiny", b"x" * 5000, _uniform_png()], ids=["tiny", "undecodable", "uniform"])
+def test_invalid_output_falls_through_and_is_not_cached(tmp_path, bad):
+    sleeps = []
+    bad_provider = _Scripted([bad])
+    good = FakeImageProvider(name="good")
+    chain = ImageChain([bad_provider, good], tmp_path / "cache", sleep=sleeps.append)
+    result = chain.generate("p", 64, 64, 1, tmp_path / "o.png")
+    assert result.provider == "good"
+    assert bad_provider.calls == 3
+    assert sleeps == [5, 10]
+    assert len(list((tmp_path / "cache").iterdir())) == 1  # only the good provider's entry
+
+
+def test_invalid_then_valid_retries_once(tmp_path):
+    sleeps = []
+    p = _Scripted([b"tiny", _good_png()])
+    chain = ImageChain([p], tmp_path / "cache", sleep=sleeps.append)
+    result = chain.generate("p", 64, 64, 1, tmp_path / "o.png")
+    assert result.provider == "scripted" and p.calls == 2 and sleeps == [5]
+
+
+def test_invalid_cache_entry_is_deleted_and_refetched(tmp_path):
+    p = _Scripted([_good_png()])
+    chain = ImageChain([p], tmp_path / "cache", sleep=lambda s: None)
+    key = chain._key(p, "p", 64, 64, 1)
+    (tmp_path / "cache").mkdir()
+    (tmp_path / "cache" / f"{key}.img").write_bytes(b"junk")
+    result = chain.generate("p", 64, 64, 1, tmp_path / "o.png")
+    assert not result.cached and p.calls == 1
+    assert (tmp_path / "cache" / f"{key}.img").read_bytes() == _good_png()
+    assert not list((tmp_path / "cache").glob("*.tmp"))

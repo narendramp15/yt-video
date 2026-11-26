@@ -8,6 +8,7 @@ class PlaceholderProvider:
     name = "placeholder"
     model = "pil-gradient"
     cacheable = False
+    validated = False  # offline gradient is intentionally near-uniform
 
     def available(self) -> bool:
         return True
