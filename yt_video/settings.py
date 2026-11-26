@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     openai_image_quality: str = "low"
     cloudflare_account_id: str | None = None
     cloudflare_api_token: str | None = None
+    clip_verify: bool = True
+    clip_min_score: float = 0.24
+    clip_model: str = "openai/clip-vit-base-patch32"
 
     # Background music
     background_music_enabled: bool = True
