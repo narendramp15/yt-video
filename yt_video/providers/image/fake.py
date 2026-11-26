@@ -17,14 +17,21 @@ class FakeImageProvider:
         return True
 
     def generate(self, prompt: str, width: int, height: int, seed: int) -> bytes | None:
-        """Seeded noise PNG at the requested size, so it passes validate_image."""
+        """Seeded PNG of random coarse colour blocks at the requested size.
+
+        Coarse blocks (upscaled with NEAREST) keep their contrast after
+        validate_image's 64x64 downsample, unlike per-pixel noise which averages
+        to near-uniform grey at large sizes.
+        """
         self.calls += 1
         if self.fail:
             return None
         from PIL import Image
 
         rng = random.Random(seed)
-        img = Image.frombytes("RGB", (width, height), rng.randbytes(width * height * 3))
+        gw, gh = min(48, width), min(27, height)
+        grid = Image.frombytes("RGB", (gw, gh), rng.randbytes(gw * gh * 3))
+        img = grid.resize((width, height), Image.NEAREST)
         out = io.BytesIO()
         img.save(out, "PNG")
         return out.getvalue()

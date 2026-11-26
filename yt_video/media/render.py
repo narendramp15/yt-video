@@ -117,6 +117,33 @@ def _ken_burns_clip(image_path: str | Path, duration: float, symbol: str = "") -
     return VideoClip(make_frame, duration=duration).with_fps(24)
 
 
+def fill_missing_scene_images(labels: list[str], scene_images: dict[str, str]) -> dict[str, str]:
+    """Give every label an image: a gap reuses the previous scene's image.
+
+    A gap at the very start uses the nearest following image. Keeps segment
+    count (and so total duration) equal to the timeline. Raises ValueError if
+    no label has an image.
+    """
+    usable = {k: v for k, v in scene_images.items() if v}
+    if not any(label in usable for label in labels):
+        raise ValueError("No scene images available for any timeline label")
+    filled: dict[str, str] = {}
+    previous: str | None = None
+    for label in labels:
+        if label in usable:
+            previous = usable[label]
+            filled[label] = previous
+        elif previous is not None:
+            logger.warning("Scene '%s' has no image - reusing previous scene image", label)
+            filled[label] = previous
+    for label in labels:
+        if label not in filled:
+            nxt = next(usable[x] for x in labels if x in usable)
+            logger.warning("Scene '%s' has no image - using nearest following image", label)
+            filled[label] = nxt
+    return {label: filled[label] for label in labels}
+
+
 def _build_background_timed(
     duration: float, timeline: dict[str, float], scene_images: dict[str, str]
 ) -> VideoClip:
@@ -125,18 +152,14 @@ def _build_background_timed(
 
     sorted_sections = sorted(timeline.items(), key=lambda x: x[1])
     logger.info("Building timed slideshow: %s", [(s, round(t, 1)) for s, t in sorted_sections])
+    existing = {k: v for k, v in scene_images.items() if v and Path(v).exists()}
+    images = fill_missing_scene_images([label for label, _ in sorted_sections], existing)
     clips = []
     for i, (label, start_t) in enumerate(sorted_sections):
         end_t = sorted_sections[i + 1][1] if i + 1 < len(sorted_sections) else duration
         seg_duration = max(end_t - start_t, 1.0)
-        scene = scene_images.get(label)
-        if scene and Path(scene).exists():
-            logger.info("  %s: %.1fs -> %.1fs", label, start_t, end_t)
-            clips.append(_ken_burns_clip(scene, seg_duration, symbol=label))
-        else:
-            logger.warning("  %s: no image found - skipping segment", label)
-    if not clips:
-        raise FileNotFoundError("No scene images found for the timeline")
+        logger.info("  %s: %.1fs -> %.1fs", label, start_t, end_t)
+        clips.append(_ken_burns_clip(images[label], seg_duration, symbol=label))
     return concatenate_videoclips(clips, method="compose")
 
 
