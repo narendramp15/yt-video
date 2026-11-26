@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
 from yt_video.logging import get_logger
-from yt_video.memory._io import read_json, write_json_atomic
+from yt_video.memory._io import write_json_atomic
 
 logger = get_logger()
 
@@ -19,6 +20,37 @@ RUN_FILE = "run.json"
 
 class RunInProgressError(RuntimeError):
     """Raised when creating a run while another is unfinished."""
+
+
+class RunStateCorruptError(RuntimeError):
+    """A run folder has a run.json that cannot be read as a valid run."""
+
+    def __init__(self, run_dir: Path, reason: str) -> None:
+        self.run_dir = Path(run_dir)
+        super().__init__(
+            f"run state in {self.run_dir} is corrupt ({reason}); repair {RUN_FILE} "
+            f"or discard the folder with --restart"
+        )
+
+
+_REQUIRED_KEYS = ("id", "status", "stages")
+
+
+def _read_run_state(run_file: Path) -> dict[str, Any]:
+    """Parse run.json without quarantining; raise RunStateCorruptError if invalid."""
+    try:
+        with open(run_file, encoding="utf-8") as f:
+            state = json.load(f)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise RunStateCorruptError(run_file.parent, f"unparseable: {exc}") from exc
+    if not isinstance(state, dict):
+        raise RunStateCorruptError(run_file.parent, f"top level is {type(state).__name__}")
+    missing = [k for k in _REQUIRED_KEYS if k not in state]
+    if missing:
+        raise RunStateCorruptError(run_file.parent, f"missing keys {missing}")
+    if not isinstance(state["stages"], dict):
+        raise RunStateCorruptError(run_file.parent, "stages is not an object")
+    return state
 
 
 class Run:
@@ -82,10 +114,9 @@ class RunStore:
             return None
         unfinished: list[Run] = []
         for run_file in self.runs_dir.glob(f"*/{RUN_FILE}"):
-            state = read_json(run_file, dict)
-            if state is None or state.get("status") not in UNFINISHED:
+            state = _read_run_state(run_file)
+            if state["status"] not in UNFINISHED:
                 continue
-            state.setdefault("id", run_file.parent.name)
             unfinished.append(Run(run_file.parent, state))
         if not unfinished:
             return None
@@ -126,7 +157,11 @@ class RunStore:
 
     def discard(self, run: Run) -> None:
         """Delete ``run.dir`` only, after verifying it is inside ``runs_dir``."""
-        target = run.dir.resolve()
+        self.discard_dir(run.dir)
+
+    def discard_dir(self, path: Path) -> None:
+        """Delete a run folder by path (e.g. one with corrupt run.json), guarded."""
+        target = Path(path).resolve()
         root = self.runs_dir.resolve()
         if target == root or root not in target.parents:
             raise ValueError(f"refusing to delete {target}: not inside {root}")

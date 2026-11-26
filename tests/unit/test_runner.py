@@ -6,7 +6,7 @@ import pytest
 from pydantic import BaseModel
 
 from yt_video.pipeline.context import RunContext
-from yt_video.pipeline.run_store import Run, RunInProgressError, RunStore
+from yt_video.pipeline.run_store import Run, RunInProgressError, RunStateCorruptError, RunStore
 from yt_video.pipeline.runner import Pipeline, StageOutcome
 
 NOW = datetime(2026, 11, 26, 9, 5, 7)
@@ -96,7 +96,9 @@ def test_discard_only_deletes_run_dir(tmp_path):
     store = RunStore(runs)
     sibling = runs / "2020-01-01_000000"
     sibling.mkdir(parents=True)
-    (sibling / "run.json").write_text("{}", encoding="utf-8")
+    (sibling / "run.json").write_text(
+        json.dumps({"id": sibling.name, "status": "done", "stages": {}}), encoding="utf-8"
+    )
     state = tmp_path / "state"
     state.mkdir()
     run = store.create(NOW)
@@ -124,7 +126,7 @@ def test_latest_unfinished_picks_newest_and_ignores_bare_folders(tmp_path):
     for rid, status in [("2026-01-01_000000", "running"), ("2026-02-01_000000", "awaiting_approval"),
                         ("2026-03-01_000000", "done")]:
         (runs / rid).mkdir(parents=True)
-        (runs / rid / "run.json").write_text(json.dumps({"id": rid, "status": status}), encoding="utf-8")
+        (runs / rid / "run.json").write_text(json.dumps({"id": rid, "status": status, "stages": {}}), encoding="utf-8")
     (runs / "2026-04-01_000000").mkdir()
     assert RunStore(runs).latest_unfinished().id == "2026-02-01_000000"
 
@@ -140,3 +142,29 @@ def test_context_load(tmp_path):
         ctx.load("s", M)
     run.mark_done("s", {"n": 3})
     assert ctx.load("s", M) == M(n=3)
+
+
+@pytest.mark.parametrize("content", ["{not json", "[1, 2]", json.dumps({"id": "x", "status": "running"})])
+def test_corrupt_run_json_blocks_create_without_quarantine(tmp_path, content):
+    runs = tmp_path / "runs"
+    bad = runs / "2026-01-01_000000"
+    bad.mkdir(parents=True)
+    (bad / "run.json").write_text(content, encoding="utf-8")
+    store = RunStore(runs)
+    for _ in range(2):
+        with pytest.raises(RunStateCorruptError) as exc:
+            store.create(NOW)
+        assert exc.value.run_dir == bad
+    assert [p.name for p in bad.iterdir()] == ["run.json"]
+    store.discard_dir(bad)
+    assert store.create(NOW).id == "2026-11-26_090507"
+
+
+def test_discard_dir_guard(tmp_path):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    store = RunStore(runs)
+    for bad in (runs, tmp_path, tmp_path / "state"):
+        with pytest.raises(ValueError):
+            store.discard_dir(bad)
+    assert runs.exists()
