@@ -7,7 +7,7 @@ from yt_video.providers.llm.base import LLMRequest, RawCompletion, extract_json
 
 
 class FakeLLM:
-    def __init__(self, responses: dict[str, dict | str | Exception], name: str = "fake") -> None:
+    def __init__(self, responses: dict[str, dict | str | Exception | list], name: str = "fake") -> None:
         self.name = name
         self.responses = responses
         self.requests: list[LLMRequest] = []
@@ -18,6 +18,8 @@ class FakeLLM:
     def complete(self, req: LLMRequest) -> RawCompletion:
         self.requests.append(req)
         value = self.responses[req.task]
+        if isinstance(value, list):  # sequence: one item consumed per call, last one repeats
+            value = value.pop(0) if len(value) > 1 else value[0]
         if isinstance(value, Exception):
             raise value
         if isinstance(value, dict):
