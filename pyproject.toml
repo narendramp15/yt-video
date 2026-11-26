@@ -8,6 +8,8 @@ dependencies = [
     # Core AI / LLM
     "openai>=1.30.0",
     "python-dotenv>=1.0.0",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
 
     # FREE TTS — Microsoft Edge TTS
     "edge-tts>=6.1.9",
@@ -19,7 +21,6 @@ dependencies = [
 
     # Market data / charts
     "yfinance>=0.2.40",
-    "mplfinance>=0.12.10b0",
     "matplotlib>=3.8.0",
     "pandas>=2.0.0",
 
@@ -55,8 +56,21 @@ all = [
 ]
 
 [dependency-groups]
-dev = []
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["yt_video"]
+
+[project.scripts]
+yt-video = "yt_video.cli:main"
 
 [tool.uv]
-# Application project (flat layout: main.py / config.py / services/) — not published as a package.
-package = false
+package = true
+
+[tool.pytest.ini_options]
+markers = ["live: real network/CLI calls"]
+addopts = "-m 'not live'"
