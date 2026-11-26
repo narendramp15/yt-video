@@ -7,7 +7,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 from yt_video.models import llm_schema
 from yt_video.providers.llm.base import (
@@ -81,12 +81,21 @@ def _usage(env: dict) -> tuple[int | None, int | None, str | None]:
     return inp, out, model
 
 
+def _classify_limit(haystack: str, api_error_status: int | None) -> Literal["usage_limit", "exit"]:
+    """Single home of the usage-limit rule: exclusions, then status, then patterns."""
+    if _NOT_LIMIT_RE.search(haystack):
+        return "exit"
+    if api_error_status in _LIMIT_STATUSES or _LIMIT_RE.search(haystack):
+        return "usage_limit"
+    return "exit"
+
+
 def parse_claude_envelope(stdout: str, stderr: str, returncode: int) -> RawCompletion:
     env = _parse_envelope(stdout)
     if env is None:
         if returncode == 0:
             raise ProviderError("exit", f"unparseable claude output: {_excerpt(stdout or stderr)}")
-        kind = "usage_limit" if _LIMIT_RE.search(f"{stdout}\n{stderr}") else "exit"
+        kind = _classify_limit(f"{stdout}\n{stderr}", None)
         raise ProviderError(kind, f"claude exited {returncode}: {_excerpt(stderr or stdout)}")
 
     result = env.get("result")
@@ -95,11 +104,8 @@ def parse_claude_envelope(stdout: str, stderr: str, returncode: int) -> RawCompl
 
     if env.get("is_error") is True or returncode != 0:
         haystack = f"{text}\n{stdout}\n{stderr}"
-        limited = not _NOT_LIMIT_RE.search(haystack) and (
-            bool(_LIMIT_RE.search(haystack)) or env.get("api_error_status") in _LIMIT_STATUSES
-        )
         raise ProviderError(
-            "usage_limit" if limited else "exit",
+            _classify_limit(haystack, env.get("api_error_status")),
             f"claude error (rc={returncode}): {_excerpt(text or stderr or stdout)}",
         )
 

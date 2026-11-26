@@ -133,6 +133,12 @@ def test_nonzero_rc_with_limit_text_on_stderr():
     assert e.value.kind == "usage_limit"
 
 
+def test_non_json_long_context_with_rate_limit_text_is_exit():
+    with pytest.raises(ProviderError) as e:
+        parse_claude_envelope("not json", "rate_limit ... Extra usage is required for long context", 1)
+    assert e.value.kind == "exit"
+
+
 def test_unparseable_stdout_rc0_is_exit_with_excerpt():
     with pytest.raises(ProviderError) as e:
         parse_claude_envelope("garbage" * 100, "", 0)
