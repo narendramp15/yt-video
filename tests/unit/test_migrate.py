@@ -25,10 +25,16 @@ def test_copies_and_keeps_source(tmp_path):
 def test_costs_db_legacy_parent_path(tmp_path):
     repo, state = _dirs(tmp_path)
     (tmp_path / "output").mkdir()
-    (tmp_path / "output" / "costs.db").write_bytes(SQLITE)
+    import sqlite3
+
+    legacy = tmp_path / "output" / "costs.db"
+    conn = sqlite3.connect(legacy)
+    conn.execute("CREATE TABLE t (x INTEGER)")
+    conn.commit()
+    conn.close()
     report = migrate_state(state, repo)
     assert "costs.db" in report.copied
-    assert (state / "costs.db").read_bytes() == SQLITE
+    assert (state / "costs.db").read_bytes()[:16] == SQLITE[:16]
 
 
 def test_existing_target_not_overwritten(tmp_path):
@@ -83,3 +89,43 @@ def test_needs_migration(tmp_path):
     state.mkdir()
     (state / "costs.db").write_bytes(SQLITE)
     assert not needs_migration(state)
+
+
+def test_copy_failure_recorded_no_partial(tmp_path, monkeypatch):
+    repo, state = _dirs(tmp_path)
+    (repo / "output" / "review_log.json").write_text("[]", encoding="utf-8")
+
+    def boom(*a, **k):
+        raise OSError("locked")
+
+    monkeypatch.setattr("yt_video.migrate.shutil.copy2", boom)
+    report = migrate_state(state, repo)
+    assert report.failed == ["review_log.json"]
+    assert report.copied == []
+    assert not (state / "review_log.json").exists()
+    assert list(state.glob("*.tmp")) == []
+
+
+def test_db_copy_includes_wal_rows(tmp_path):
+    import sqlite3
+
+    repo, state = _dirs(tmp_path)
+    src = repo / "output" / "costs.db"
+    conn = sqlite3.connect(src)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA wal_autocheckpoint=0")
+    conn.execute("CREATE TABLE t (x INTEGER)")
+    conn.execute("INSERT INTO t VALUES (42)")
+    conn.commit()
+    try:
+        assert (repo / "output" / "costs.db-wal").exists()
+        report = migrate_state(state, repo)
+        assert report.copied == ["costs.db"]
+    finally:
+        conn.close()
+    out = sqlite3.connect(state / "costs.db")
+    try:
+        assert out.execute("SELECT x FROM t").fetchall() == [(42,)]
+    finally:
+        out.close()
+    assert list(state.glob("*.tmp")) == []

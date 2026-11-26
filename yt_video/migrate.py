@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
+import sqlite3
+from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -27,6 +30,7 @@ class MigrationReport:
     skipped_missing: list[str] = field(default_factory=list)
     skipped_invalid: list[str] = field(default_factory=list)
     skipped_exists: list[str] = field(default_factory=list)
+    failed: list[str] = field(default_factory=list)
 
 
 def needs_migration(state_dir: Path) -> bool:
@@ -42,6 +46,25 @@ def _is_valid(name: str, path: Path) -> bool:
         return True
     except (OSError, ValueError):
         return False
+
+
+def _copy_atomic(name: str, source: Path, target: Path) -> None:
+    """Copy via a temp file then os.replace, so a partial copy never lands on the target.
+
+    .db files use the sqlite backup API (reads committed WAL content, source opened read-only).
+    """
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    try:
+        if name.endswith(".db"):
+            with closing(sqlite3.connect(f"{source.as_uri()}?mode=ro", uri=True)) as src, closing(
+                sqlite3.connect(tmp)
+            ) as dst:
+                src.backup(dst)
+        else:
+            shutil.copy2(source, tmp)
+        os.replace(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def migrate_state(state_dir: Path, repo_root: Path) -> MigrationReport:
@@ -63,6 +86,11 @@ def migrate_state(state_dir: Path, repo_root: Path) -> MigrationReport:
             log.warning("Skipping invalid legacy file %s (%s)", name, source)
             report.skipped_invalid.append(name)
             continue
-        shutil.copy2(source, target)
+        try:
+            _copy_atomic(name, source, target)
+        except (OSError, sqlite3.Error) as exc:
+            log.warning("Failed to migrate %s from %s: %s", name, source, exc)
+            report.failed.append(name)
+            continue
         report.copied.append(name)
     return report
