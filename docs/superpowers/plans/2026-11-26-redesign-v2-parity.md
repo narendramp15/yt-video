@@ -67,7 +67,7 @@ Fixed, each with its own commit and a regression test:
 6. The thumbnail was 1024x576 when the provider returned less: now fitted to exactly 1280x720.
 7. Default Pollinations model changed to `flux` (`flux-realism` 402 was probably the same rate limit; the change is harmless).
 
-Open (need a design decision or owner action; not fixed):
+Later findings (D8 and D9 fixed in round 3, D10 not a defect; the last two items are owner notes):
 - D8 (fixed, round 3). Shorts cap raised from 55 s to `SHORTS_MAX_DURATION_S = 175` and audio, background and caption cues now share one capped duration (a WARNING with both durations is logged on truncation). Verified on the real run assets by re-rendering only the Shorts into scratch: 1080x1920, 95.56 s (voice length), frame at 76 s shows an image with its caption, no black tail.
 - D9 (fixed, round 3). The review stage now sends `strip_scene_markers(long_script)`; regression test asserts no `[SCENE:` in the review prompt.
 - D10 (not a defect; no code change). The "Proportional scene timeline" INFO lines are only the baseline log printed before refinement. Offline replay on the run's saved transcript words and `long_script`: 22 of 27 scenes were refined by word timestamps (e.g. intro 0.0 to 23.08 s, s1 31.04 to 51.86 s), the saved `_timeline.json` shows the refined values, and v1 `_refine_with_whisper(_proportional_timeline(...))` returns an identical 27-entry timeline to v2 `align_scenes` on the same inputs.

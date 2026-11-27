@@ -14,7 +14,8 @@ uv sync
 
 # 2. Configure
 cp env.example .env
-# Edit .env. Only YOUTUBE_CLIENT_SECRET (+ CHANNEL_NAME) are needed if the Claude CLI is logged in.
+# Edit .env. If the Claude CLI is logged in, only the REQUIRED block of env.example is needed:
+# YOUTUBE_CLIENT_SECRET, CHANNEL_NAME and DEFAULT_CATEGORY.
 
 # 3. Run the pipeline (resumes the unfinished run, if any)
 uv run python main.py
@@ -43,7 +44,7 @@ Prerequisites: Python 3.11+, `ffmpeg` on PATH, and the `claude` CLI logged in vi
 | `--list-packaging` | Print the pending packaging variants and exit |
 | `--approve-packaging [--variant N]` | Approve pending packaging for public upload (optionally choose the 0-based variant) |
 | `--reject-packaging` | Reject packaging; the run uploads as private |
-| `--migrate-state` | Copy legacy v1 state files into `state/` and exit (never deletes or overwrites) |
+| `--migrate-state` | Copy exactly five legacy v1 files into `state/` and exit: `tts_style_memory.json`, `costs.db`, `review_log.json`, `analytics_log.json`, `x_post_log.json` (never deletes or overwrites) |
 
 Exit codes: `0` done, `1` pipeline error, `2` usage error, `3` **awaiting packaging approval**.
 
@@ -181,7 +182,7 @@ Durable cross-run state lives in `state/` (git-ignored):
 | `youtube_token.json` | Cached OAuth token (Data + Analytics scopes) |
 | `playlists.json` | Playlist cache |
 
-Upgrading from v1: run `uv run python main.py --migrate-state` once to copy the old `output/` state files into `state/`.
+Upgrading from v1: run `uv run python main.py --migrate-state` once to copy the five legacy files listed above from `output/` into `state/`. `yt_analytics_memory.json`, the OAuth token and the playlist cache are not copied (the token is re-created on first sign-in).
 
 Only one unfinished run exists at a time; use `--new` or `--restart` to move on.
 
