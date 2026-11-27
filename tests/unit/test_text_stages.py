@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
@@ -230,7 +231,14 @@ def test_review_log_failure_is_non_fatal(env, monkeypatch):
 
 def test_review_prompt_has_no_scene_markers(env):
     _run_all(env.ctx)
+    data = dict(env.ctx.run.get("write_script"))
+    # Real scripts carry each marker on its own line.
+    data["long_script"] = re.sub(
+        r" ?(\[SCENE:[^\]]+\]) ?", lambda m: "\n" + m.group(1) + "\n", data["long_script"]
+    )
+    assert "[SCENE:" in data["long_script"]
+    env.ctx.run.mark_done("write_script", data)
+    env.fake.requests.clear()
+    text.ReviewStage().run(env.ctx)
     review_reqs = [r for r in env.fake.requests if r.task == "review"]
     assert review_reqs and "[SCENE:" not in review_reqs[0].prompt
-    script = env.ctx.run.get("write_script")["long_script"]
-    assert "[SCENE:" in script  # the stored script keeps its markers
