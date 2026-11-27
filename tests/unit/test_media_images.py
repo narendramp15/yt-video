@@ -170,3 +170,17 @@ def test_fill_missing_scene_images_no_images_raises():
 
     with pytest.raises(ValueError):
         fill_missing_scene_images(["intro"], {})
+
+
+class SmallImageProvider(FakeImageProvider):
+    """Mimics Pollinations' free tier, which caps output at 1024x576."""
+
+    def generate(self, prompt: str, width: int, height: int, seed: int) -> bytes | None:
+        return super().generate(prompt, 1024, 576, seed)
+
+
+def test_thumbnail_is_upscaled_to_1280x720_when_provider_returns_smaller(tmp_path):
+    chain = ImageChain([SmallImageProvider()], tmp_path / "cache", sleep=lambda s: None)
+    out = generate_thumbnail(chain, "Why Volcanoes Erupt", "Volcanoes", "", "HOOK", tmp_path / "t.jpg")
+    with Image.open(out) as img:
+        assert img.size == (1280, 720)

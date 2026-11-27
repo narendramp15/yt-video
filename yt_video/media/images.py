@@ -231,10 +231,28 @@ def generate_thumbnail(
         logger.warning("Thumbnail generation failed: %s", exc)
         return None
 
+    _fit_to_size(path, *_THUMB_SIZE)
     text = (hook_text or derive_thumbnail_hook(title)).strip()
     if text and text_enabled:
         _compose_thumbnail_text(path, text)
     return path
+
+
+def _fit_to_size(path: Path, width: int, height: int) -> None:
+    """Cover-resize and center-crop ``path`` in place to exactly width x height.
+
+    Providers may return smaller images (Pollinations' free tier caps at 1024x576).
+    """
+    from PIL import Image
+
+    with Image.open(path) as src:
+        if src.size == (width, height):
+            return
+        img = src.convert("RGB")
+    scale = max(width / img.width, height / img.height)
+    img = img.resize((max(width, round(img.width * scale)), max(height, round(img.height * scale))), Image.LANCZOS)
+    left, top = (img.width - width) // 2, (img.height - height) // 2
+    img.crop((left, top, left + width, top + height)).save(path, "JPEG", quality=92)
 
 
 def _load_thumbnail_font(size: int):
