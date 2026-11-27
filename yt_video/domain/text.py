@@ -38,7 +38,7 @@ def strip_scene_markers(script: str) -> str:
     lines = []
     for line in script.splitlines():
         # Inline markers ("[SCENE:s1] Hello") go too; collapse the gap they leave.
-        line = re.sub(r"[ 	]{2,}", " ", _SCENE_RE.sub(" ", line))
+        line = re.sub(r"[ ]{2,}", " ", _SCENE_RE.sub(" ", line))
         stripped = line.strip()
         # Stage directions: lines starting with '('
         if stripped.startswith("("):
