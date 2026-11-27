@@ -7,6 +7,7 @@ network or file system; OAuth and the API client are created on first use.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -81,7 +82,8 @@ class YouTubeClient:
         if self._token_path.exists():
             try:
                 creds = Credentials.from_authorized_user_file(str(self._token_path))
-            except Exception:
+            except Exception as exc:
+                logger.warning("YouTube token load failed (%s); re-authorising", exc)
                 creds = None
 
         if creds is not None and not set(SCOPES) <= set(creds.scopes or []):
@@ -98,9 +100,14 @@ class YouTubeClient:
                 self._save_token(creds)
                 self._creds = creds
                 return creds
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("YouTube token refresh failed (%s); re-authorising", exc)
 
+        if not sys.stdin.isatty():
+            raise RuntimeError(
+                "YouTube authorization is needed but there is no interactive terminal. "
+                "Run once from an interactive terminal (uv run python main.py) to sign in."
+            )
         logger.info("Starting YouTube OAuth flow...")
         flow = InstalledAppFlow.from_client_secrets_file(str(self._client_secret_path), SCOPES)
         creds = flow.run_local_server(port=0)

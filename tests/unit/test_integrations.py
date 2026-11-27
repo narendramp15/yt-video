@@ -138,6 +138,7 @@ def test_credentials_missing_scope_reruns_flow(tmp_path, monkeypatch):
 
     monkeypatch.setattr(youtube.InstalledAppFlow, "from_client_secrets_file",
                         fake_from_secrets)
+    monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: True))
     assert _client(tmp_path).credentials() is new
     assert seen["scopes"] == youtube.SCOPES
     assert json.loads((tmp_path / "tok.json").read_text(encoding="utf-8")) == {"token": "new"}
@@ -153,3 +154,47 @@ def test_pinned_comment_failure_is_nonfatal(tmp_path, monkeypatch):
     monkeypatch.setattr(c, "_api", lambda: (_ for _ in ()).throw(RuntimeError("x")))
     c.post_pinned_comment("vid", "hello")  # must not raise
     assert c.add_video_to_playlist("pl", "vid") is False
+
+
+def _no_flow(monkeypatch):
+    flow = []
+    monkeypatch.setattr(youtube.InstalledAppFlow, "from_client_secrets_file",
+                        lambda *a, **k: flow.append(1))
+    return flow
+
+
+def test_oauth_browser_flow_refused_without_tty(tmp_path, monkeypatch):
+    flow = _no_flow(monkeypatch)
+    monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: False))
+    with pytest.raises(RuntimeError, match="interactive"):
+        _client(tmp_path).credentials()
+    assert flow == []
+
+
+def test_token_load_failure_is_logged(tmp_path, monkeypatch, caplog):
+    (tmp_path / "tok.json").write_text("{}", encoding="utf-8")
+
+    def bad(p, s=None):
+        raise ValueError("corrupt token")
+
+    monkeypatch.setattr(youtube.Credentials, "from_authorized_user_file", bad)
+    _no_flow(monkeypatch)
+    monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: False))
+    with caplog.at_level("WARNING"), pytest.raises(RuntimeError):
+        _client(tmp_path).credentials()
+    assert "corrupt token" in caplog.text
+
+
+def test_token_refresh_failure_is_logged(tmp_path, monkeypatch, caplog):
+    def boom(request):
+        raise OSError("refresh denied")
+
+    old = SimpleNamespace(valid=False, expired=True, refresh_token="r",
+                          scopes=list(youtube.SCOPES), refresh=boom)
+    (tmp_path / "tok.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(youtube.Credentials, "from_authorized_user_file", lambda p, s=None: old)
+    _no_flow(monkeypatch)
+    monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: False))
+    with caplog.at_level("WARNING"), pytest.raises(RuntimeError):
+        _client(tmp_path).credentials()
+    assert "refresh denied" in caplog.text
