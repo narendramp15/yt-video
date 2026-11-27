@@ -6,5 +6,5 @@ pytestmark = pytest.mark.live
 
 
 def test_pollinations_returns_jpeg():
-    data = PollinationsProvider("flux-realism", None).generate("a red apple on a table", 256, 256, 1)
+    data = PollinationsProvider("flux", None).generate("a red apple on a table", 256, 256, 1)
     assert data is not None and data.startswith(b"\xff\xd8")

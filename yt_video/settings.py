@@ -65,7 +65,7 @@ class Settings(BaseSettings):
 
     # Images
     image_providers: CommaList = ["pollinations", "cloudflare", "placeholder"]
-    pollinations_model: str = "flux-realism"
+    pollinations_model: str = "flux"
     pollinations_key: str | None = None
     openai_image_model: str = "gpt-image-1"
     openai_image_quality: str = "low"
