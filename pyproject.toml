@@ -1,7 +1,7 @@
 [project]
 name = "yt-video"
 version = "0.1.0"
-description = "100% free trend-driven YouTube pipeline (Edge TTS + Pollinations + local FFmpeg)"
+description = "Trend-driven YouTube pipeline (Claude CLI + Edge TTS + free image providers + local FFmpeg)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -13,13 +13,12 @@ dependencies = [
 
     # FREE TTS — Microsoft Edge TTS
     "edge-tts>=7.3.1",
-    "pydub>=0.25.1",
 
     # FREE trend signals
     "pytrends>=4.9.2",
     "beautifulsoup4>=4.12.0",
 
-    # Market data / charts
+    # Market data (news headlines for topic discovery)
     "yfinance>=0.2.40",
     "matplotlib>=3.8.0",
     "pandas>=2.0.0",
@@ -74,3 +73,4 @@ package = true
 [tool.pytest.ini_options]
 markers = ["live: real network/CLI calls"]
 addopts = "-m 'not live'"
+testpaths = ["tests"]

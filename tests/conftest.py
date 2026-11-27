@@ -7,7 +7,7 @@ from yt_video.settings import Settings, load_settings
 
 @pytest.fixture(autouse=True)
 def _isolate_settings_env(monkeypatch):
-    """Legacy root tests import config.py, which loads the real .env into os.environ."""
+    """Keep a developer's real environment variables from leaking into Settings."""
     for name in list(os.environ):
         if name.lower() in Settings.model_fields:
             monkeypatch.delenv(name, raising=False)
