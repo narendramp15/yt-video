@@ -206,3 +206,73 @@ def test_schema_request_passes_json_schema(tmp_path):
 def test_available(tmp_path):
     assert ClaudeCLIProvider("no-such-binary-xyz", MODELS, TIMEOUTS, tmp_path).available() is False
     assert ClaudeCLIProvider("python", MODELS, TIMEOUTS, tmp_path).available() is True
+
+
+# ---- I1: breaker signals -------------------------------------------------
+
+def test_429_envelope_with_overloaded_stderr_is_usage_limit():
+    env = {"is_error": True, "result": "You've hit your limit \u00b7 resets 3pm",
+           "api_error_status": 429}
+    with pytest.raises(ProviderError) as e:
+        parse_claude_envelope(json.dumps(env), "API Error: 529 overloaded_error. Retrying in 2s", 1)
+    assert e.value.kind == "usage_limit"
+
+
+def test_bare_extra_usage_is_usage_limit():
+    env = {"is_error": True, "result": "You are now using extra usage"}
+    with pytest.raises(ProviderError) as e:
+        parse_claude_envelope(json.dumps(env), "", 1)
+    assert e.value.kind == "usage_limit"
+
+
+def test_extra_usage_required_for_long_context_is_not_usage_limit():
+    env = {"is_error": True, "result": "Extra usage is required for long context"}
+    with pytest.raises(ProviderError) as e:
+        parse_claude_envelope(json.dumps(env), "", 1)
+    assert e.value.kind == "exit"
+
+
+def test_failed_envelope_carries_usage_and_notional_cost():
+    env = {"is_error": True, "result": "boom", "total_cost_usd": 0.12,
+           "usage": {"input_tokens": 7, "output_tokens": 3}}
+    with pytest.raises(ProviderError) as e:
+        parse_claude_envelope(json.dumps(env), "", 1)
+    assert (e.value.input_tokens, e.value.output_tokens, e.value.notional_cost_usd) == (7, 3, 0.12)
+
+
+def test_success_with_overage_stderr_flags_overage_and_keeps_result():
+    raw = parse_claude_envelope(json.dumps(_bare("success_text")), "You are now using extra usage", 0)
+    assert raw.text == "ok" and raw.overage is True
+
+
+def test_success_overage_scan_ignores_result_text():
+    env = dict(_bare("success_text"), result="you've hit your limit, extra usage rate_limit")
+    assert parse_claude_envelope(json.dumps(env), "", 0).overage is False
+
+
+def test_success_with_truthy_fallback_credit_flags_overage():
+    env = _bare("success_text")
+    env["usage"] = dict(env["usage"], fallback_credit={"amount": 1})
+    assert parse_claude_envelope(json.dumps(env), "", 0).overage is True
+
+
+@pytest.mark.parametrize("name", ["success_text", "success_schema"])
+def test_real_success_fixtures_do_not_trip(name):
+    assert parse_claude_envelope(json.dumps(_bare(name)), "", 0).overage is False
+
+
+# ---- M4: subprocess OSError / decoding -----------------------------------
+
+def test_oserror_other_than_missing_is_unavailable(tmp_path):
+    def run(args, **kw):
+        raise PermissionError(5, "Access is denied")
+
+    with pytest.raises(ProviderError) as e:
+        _provider(tmp_path, run).complete(_req())
+    assert e.value.kind == "unavailable"
+
+
+def test_subprocess_decodes_with_replace(tmp_path):
+    calls = []
+    _provider(tmp_path, _capture(json.dumps(_bare("success_text")), calls)).complete(_req())
+    assert calls[0][1]["errors"] == "replace"

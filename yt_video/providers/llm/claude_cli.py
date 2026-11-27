@@ -19,19 +19,17 @@ from yt_video.providers.llm.base import (
 
 logger = get_logger(__name__)
 
-# Case-insensitive. Deliberately excludes "overloaded"/529 and
-# "Extra usage is required for long context" (Ruling 4): those are plain "exit".
+# Case-insensitive. "overloaded"/529 is NOT a limit status (plain "exit"), and
+# "Extra usage is required for long context" is a request-shape error, not a limit
+# (Ruling 4). That exclusion applies only to the envelope's own ``result`` message.
 USAGE_LIMIT_PATTERNS: tuple[str, ...] = (
     r"hit your .{0,30}limit",
     r"usage limit reached",
     r"credit balance is too low",
     r"rate_limit",
+    r"extra usage(?! is required for long context)",
 )
-NOT_USAGE_LIMIT_PATTERNS: tuple[str, ...] = (
-    r"overloaded",
-    r"extra usage is required for long context",
-)
-_NOT_LIMIT_RE = re.compile("|".join(NOT_USAGE_LIMIT_PATTERNS), re.IGNORECASE)
+_LONG_CONTEXT_RE = re.compile(r"extra usage is required for long context", re.IGNORECASE)
 _LIMIT_RE = re.compile("|".join(USAGE_LIMIT_PATTERNS), re.IGNORECASE)
 _LIMIT_STATUSES = {429, 402}
 _EXCERPT = 300
@@ -81,13 +79,32 @@ def _usage(env: dict) -> tuple[int | None, int | None, str | None]:
     return inp, out, model
 
 
-def _classify_limit(haystack: str, api_error_status: int | None) -> Literal["usage_limit", "exit"]:
-    """Single home of the usage-limit rule: exclusions, then status, then patterns."""
-    if _NOT_LIMIT_RE.search(haystack):
+def _classify_limit(
+    message: str, api_error_status: int | None, haystack: str | None = None
+) -> Literal["usage_limit", "exit"]:
+    """Single home of the usage-limit rule.
+
+    ``message`` is the envelope's ``result`` (or the raw output when there is no
+    envelope): a long-context message there is never a limit. Otherwise a 429/402
+    status wins, then the patterns over ``haystack`` (message + stdout + stderr).
+    """
+    if _LONG_CONTEXT_RE.search(message):
         return "exit"
-    if api_error_status in _LIMIT_STATUSES or _LIMIT_RE.search(haystack):
+    if api_error_status in _LIMIT_STATUSES or _LIMIT_RE.search(haystack if haystack is not None else message):
         return "usage_limit"
     return "exit"
+
+
+def _success_overage(env: dict, stderr: str) -> bool:
+    """Overage notice on a successful call. UNVERIFIED: the shapes below are not
+    confirmed against a real overage run (fixtures are synthetic). Scans stderr
+    only, never ``result``; ``usage.fallback_credit`` is null on real success
+    fixtures, so any truthy value is treated as a soft overage flag.
+    """
+    if _LIMIT_RE.search(stderr or ""):
+        return True
+    usage = env.get("usage")
+    return isinstance(usage, dict) and bool(usage.get("fallback_credit"))
 
 
 def parse_claude_envelope(stdout: str, stderr: str, returncode: int) -> RawCompletion:
@@ -104,9 +121,14 @@ def parse_claude_envelope(stdout: str, stderr: str, returncode: int) -> RawCompl
 
     if env.get("is_error") is True or returncode != 0:
         haystack = f"{text}\n{stdout}\n{stderr}"
+        cost = env.get("total_cost_usd")
         raise ProviderError(
-            _classify_limit(haystack, env.get("api_error_status")),
+            _classify_limit(text, env.get("api_error_status"), haystack),
             f"claude error (rc={returncode}): {_excerpt(text or stderr or stdout)}",
+            input_tokens=inp,
+            output_tokens=out,
+            model=model,
+            notional_cost_usd=float(cost) if isinstance(cost, (int, float)) else None,
         )
 
     data = env.get("structured_output")
@@ -122,6 +144,7 @@ def parse_claude_envelope(stdout: str, stderr: str, returncode: int) -> RawCompl
         output_tokens=out,
         cost_usd=0.0,
         notional_cost_usd=float(cost) if isinstance(cost, (int, float)) else None,
+        overage=_success_overage(env, stderr),
     )
 
 
@@ -160,11 +183,12 @@ class ClaudeCLIProvider:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
+                errors="replace",
                 timeout=timeout,
                 cwd=self._scratch,
             )
-        except FileNotFoundError as exc:
-            raise ProviderError("unavailable", f"claude CLI not found: {exc}") from exc
+        except OSError as exc:  # FileNotFoundError, WinError 5/206, ...
+            raise ProviderError("unavailable", f"claude CLI could not run: {exc}") from exc
         except subprocess.TimeoutExpired as exc:
             raise ProviderError("timeout", f"claude timed out after {timeout}s") from exc
         raw = parse_claude_envelope(proc.stdout or "", proc.stderr or "", proc.returncode)

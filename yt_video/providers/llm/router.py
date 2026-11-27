@@ -1,6 +1,8 @@
 """LLM router: provider fallback, validation retry, and a per-run circuit breaker."""
 from __future__ import annotations
 
+import shutil
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 
@@ -35,11 +37,29 @@ class LLMRouter:
         self._ledger = ledger
         self._run_id = run_id
         self.disabled: set[str] = set()
+        self._breaker_reason: dict[str, str] = {}
+        self._cleanup_dirs: list[Path] = []
+
+    def close(self) -> None:
+        """Best-effort removal of per-run temp dirs (Claude scratch). Idempotent."""
+        while self._cleanup_dirs:
+            shutil.rmtree(self._cleanup_dirs.pop(), ignore_errors=True)
+
+    def _trip(self, name: str, reason: str) -> None:
+        """Open the breaker for the rest of the run; warn once (label only, not persisted)."""
+        if name in self.disabled:
+            return
+        self.disabled.add(name)
+        self._breaker_reason[name] = reason
+        log.warning("%s circuit breaker open (%s): skipping it for the rest of this run", name, reason)
 
     def complete(self, req: LLMRequest, stage: str) -> LLMResult:
         attempts: list[tuple[str, str]] = []
         for provider in self._providers:
-            if not provider.available() or provider.name in self.disabled:
+            if provider.name in self.disabled:
+                attempts.append((provider.name, f"breaker_open({self._breaker_reason[provider.name]})"))
+                continue
+            if not provider.available():
                 self._note_failure(provider.name, "unavailable", attempts)
                 continue
             result = self._try_provider(provider, req, stage, attempts)
@@ -62,11 +82,13 @@ class LLMRouter:
                     current = replace(req, prompt=req.prompt + _RETRY_SUFFIX.format(errors=str(err)))
                     continue
                 if err.kind == "usage_limit":
-                    self.disabled.add(provider.name)
+                    self._trip(provider.name, "usage_limit")
                 self._note_failure(provider.name, err.kind, attempts)
                 return None
             parsed, errors = self._validate(req, raw)
             if errors is None:
+                if raw.overage:  # UNVERIFIED success-path signal (Ruling 21): keep result, stop using Claude
+                    self._trip(provider.name, "overage")
                 return self._finish(raw, parsed, stage, attempts)
             self._record_failed(provider.name, stage, raw, "invalid_output")
             log.warning("%s attempt %d failed validation: %s", provider.name, attempt, errors)
@@ -90,12 +112,19 @@ class LLMRouter:
         log.warning("LLM fallback: %s failed (%s)", name, kind)
 
     def _record_failed(self, provider: str, stage: str, src: ProviderError | RawCompletion, reason: str) -> None:
-        """Ruling 7: a billed call that failed still goes in the ledger."""
-        if self._ledger is None or not src.cost_usd or src.cost_usd <= 0:
+        """Ruling 7 / M2: a failed call that billed or reported usage still goes in the ledger."""
+        notional = getattr(src, "notional_cost_usd", None)
+        has_usage = (
+            (src.cost_usd or 0) > 0
+            or (src.input_tokens or 0) > 0
+            or (src.output_tokens or 0) > 0
+            or (notional or 0) > 0
+        )
+        if self._ledger is None or not has_usage:
             return
         self._ledger.record(
             self._run_id, stage, "llm", provider, getattr(src, "model", None) or "unknown",
-            src.input_tokens, src.output_tokens, src.cost_usd, fallback_reason=reason,
+            src.input_tokens, src.output_tokens, src.cost_usd or 0.0, notional, reason,
         )
 
     def _finish(
@@ -114,15 +143,19 @@ def build_router(
     settings: Settings, ledger: CostLedger | None, run_id: str, claude_only: bool
 ) -> LLMRouter:
     providers: list[LLMProvider] = []
+    cleanup: list[Path] = []
     for name in settings.llm_providers:
         if name == "claude_cli":
             from yt_video.providers.llm.claude_cli import ClaudeCLIProvider
 
+            # Outside the repo (M1); removed by LLMRouter.close().
+            scratch = Path(tempfile.mkdtemp(prefix="yt-video-claude-"))
+            cleanup.append(scratch)
             providers.append(ClaudeCLIProvider(
                 cli_path=settings.claude_cli_path,
                 model_map={"script": settings.claude_model_script, "light": settings.claude_model_light},
                 timeouts={"script": settings.claude_timeout_script_s, "light": settings.claude_timeout_light_s},
-                scratch_dir=Path(settings.runs_dir) / run_id / "claude_scratch",
+                scratch_dir=scratch,
             ))
         elif name == "openai":
             from yt_video.providers.llm.openai_api import OpenAIProvider
@@ -134,4 +167,6 @@ def build_router(
             ))
         else:
             raise ValueError(f"unknown LLM provider: {name!r}")
-    return LLMRouter(providers, ledger, run_id, claude_only)
+    router = LLMRouter(providers, ledger, run_id, claude_only)
+    router._cleanup_dirs.extend(cleanup)
+    return router

@@ -31,6 +31,9 @@ class RawCompletion:
     output_tokens: int | None
     cost_usd: float
     notional_cost_usd: float | None
+    # Soft overage signal on a successful call: the result is kept but the router
+    # trips the Claude breaker (Ruling 21). UNVERIFIED signal shape.
+    overage: bool = False
 
 
 @dataclass
@@ -49,6 +52,7 @@ class ProviderError(Exception):
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         model: str | None = None,
+        notional_cost_usd: float | None = None,
     ) -> None:
         super().__init__(message or kind)
         self.kind: ErrorKind = kind
@@ -57,6 +61,7 @@ class ProviderError(Exception):
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
         self.model = model
+        self.notional_cost_usd = notional_cost_usd
 
 
 class LLMError(Exception):

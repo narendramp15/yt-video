@@ -156,3 +156,60 @@ def test_build_router(tmp_path):
     assert [p.name for p in router._providers] == ["claude_cli", "openai"]
     with pytest.raises(ValueError):
         build_router(Settings(_env_file=None, llm_providers=["bogus"]), None, "r", False)
+
+
+# ---- I1 / M1-M3 ------------------------------------------------------------
+
+class Overage(FakeLLM):
+    def complete(self, r):
+        c = super().complete(r)
+        c.overage = True
+        return c
+
+
+def test_success_with_overage_keeps_result_and_trips_breaker(caplog):
+    claude = Overage({"t": {"title": "c"}}, name="claude_cli")
+    openai = FakeLLM({"t": {"title": "o"}}, name="openai")
+    router = LLMRouter([claude, openai], None, "r")
+    with caplog.at_level("WARNING"):
+        first = router.complete(req(Out), "s")
+        second = router.complete(req(Out), "s")
+    assert first.provider == "claude_cli" and first.parsed == Out(title="c")
+    assert router.disabled == {"claude_cli"}
+    assert second.provider == "openai" and len(claude.requests) == 1
+    assert second.fallback_reason == "claude_cli: breaker_open(overage)"
+    assert sum("circuit breaker" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_breaker_skip_is_labelled_and_warned_once(caplog):
+    claude, openai = pair(ProviderError("usage_limit"))
+    router = LLMRouter([claude, openai], None, "r")
+    with caplog.at_level("WARNING"):
+        r1 = router.complete(req(), "s")
+        r2 = router.complete(req(), "s")
+        r3 = router.complete(req(), "s")
+    assert r1.fallback_reason == "claude_cli: usage_limit"
+    assert r2.fallback_reason == r3.fallback_reason == "claude_cli: breaker_open(usage_limit)"
+    assert sum("circuit breaker" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_failed_attempt_with_usage_is_recorded_at_zero_cost(tmp_path):
+    ledger = CostLedger(tmp_path / "c.db")
+    err = ProviderError("exit", input_tokens=10, output_tokens=5, model="sonnet", notional_cost_usd=0.2)
+    claude, openai = pair(err)
+    LLMRouter([claude, openai], ledger, "r").complete(req(), "s")
+    failed = [r for r in ledger.run_rows("r") if r["provider"] == "claude_cli"]
+    assert len(failed) == 1
+    assert failed[0]["cost_usd"] == 0 and failed[0]["notional_cost_usd"] == 0.2
+    assert failed[0]["input_tokens"] == 10 and failed[0]["fallback_reason"] == "exit"
+
+
+def test_build_router_scratch_is_outside_repo_and_closed(tmp_path):
+    s = Settings(_env_file=None, llm_providers=["claude_cli"], runs_dir=tmp_path / "runs")
+    router = build_router(s, None, "r1", claude_only=False)
+    scratch = router._providers[0]._scratch
+    assert tmp_path not in scratch.parents and "runs" not in scratch.parts
+    assert scratch.exists()
+    router.close()
+    assert not scratch.exists()
+    router.close()  # idempotent
