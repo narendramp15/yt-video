@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from yt_video import llm_tasks
 from yt_video.domain.formats import format_prompt_block, get_format, pick_format
 from yt_video.domain.packaging import derive_thumbnail_hook, pick_best_packaging
-from yt_video.domain.text import make_slug
+from yt_video.domain.text import make_slug, strip_scene_markers
 from yt_video.domain.topics import (
     apply_niche_hard_filter,
     content_angle,
@@ -228,7 +228,7 @@ class ReviewStage:
 
     def run(self, ctx: RunContext) -> StageOutcome | None:
         script = ctx.load("write_script", ScriptOutput)
-        result = llm_tasks.review(ctx.router, script.long_script)
+        result = llm_tasks.review(ctx.router, strip_scene_markers(script.long_script))
         log.info("review score: %d/100 safety=%s", result.score, result.safety)
         topic = ctx.load("rank_topics", RankData).selected.title
         self._append_log(ctx, topic, result)

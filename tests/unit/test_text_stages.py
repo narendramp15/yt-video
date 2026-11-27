@@ -226,3 +226,11 @@ def test_review_log_failure_is_non_fatal(env, monkeypatch):
 
     monkeypatch.setattr("builtins.open", bad_open)
     assert _run_all(env.ctx) == "done"
+
+
+def test_review_prompt_has_no_scene_markers(env):
+    _run_all(env.ctx)
+    review_reqs = [r for r in env.fake.requests if r.task == "review"]
+    assert review_reqs and "[SCENE:" not in review_reqs[0].prompt
+    script = env.ctx.run.get("write_script")["long_script"]
+    assert "[SCENE:" in script  # the stored script keeps its markers
