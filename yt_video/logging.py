@@ -20,6 +20,9 @@ def get_logger(name: str = _DEFAULT_NAME) -> logging.Logger:
         console._yt_console = True  # type: ignore[attr-defined]
         root.addHandler(console)
         root.setLevel(logging.INFO)
+    if name == "yt_video" or name.startswith("yt_video."):
+        # Nest package loggers under the app root so they reach its handlers.
+        name = _DEFAULT_NAME + name[len("yt_video"):]
     return logging.getLogger(name)
 
 

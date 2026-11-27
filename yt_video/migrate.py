@@ -2,15 +2,15 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import shutil
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
+from yt_video.logging import get_logger
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 _SQLITE_MAGIC = b"SQLite format 3\x00"
 

@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import re
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
+from yt_video.logging import get_logger
 
 if TYPE_CHECKING:
     from yt_video.costs import CostLedger
     from yt_video.settings import Settings
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 OPENAI_TTS_MODEL = "tts-1"
 OPENAI_TTS_VOICE = "alloy"

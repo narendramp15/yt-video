@@ -1,12 +1,12 @@
 """Pollinations.ai provider (free)."""
 from __future__ import annotations
 
-import logging
 from urllib.parse import quote
 
 import requests
+from yt_video.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class PollinationsProvider:

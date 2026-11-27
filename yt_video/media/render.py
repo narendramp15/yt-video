@@ -6,7 +6,6 @@ moviepy is imported lazily inside the functions that need it.
 """
 from __future__ import annotations
 
-import logging
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -15,11 +14,12 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from yt_video.settings import PROJECT_ROOT, Settings
+from yt_video.logging import get_logger
 
 if TYPE_CHECKING:  # pragma: no cover
     from moviepy import VideoClip
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _W, _H = 1920, 1080
 _SUPPORTED_MUSIC_EXTENSIONS = (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac")

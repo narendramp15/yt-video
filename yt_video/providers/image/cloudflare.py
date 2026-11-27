@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import base64
 import io
-import logging
 
 import requests
+from yt_video.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _MODEL = "@cf/black-forest-labs/flux-1-schnell"
 

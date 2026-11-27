@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import base64
-import logging
 
 import requests
 
 from yt_video.costs import CostLedger
+from yt_video.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # v1 recorded no image cost. Flat per-image ESTIMATE (gpt-image-1, low quality, ~1024px);
 # actual billing varies by model/quality/size. Update if OpenAI pricing changes.

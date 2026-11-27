@@ -6,11 +6,11 @@ A disabled verifier, or one whose backend fails to load, returns None.
 """
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any
+from yt_video.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ClipVerifier:

@@ -7,7 +7,6 @@ hook-text overlay.
 from __future__ import annotations
 
 import hashlib
-import logging
 import re
 import shutil
 from pathlib import Path
@@ -15,8 +14,9 @@ from pathlib import Path
 from yt_video.domain.packaging import derive_thumbnail_hook
 from yt_video.media.clip import ClipVerifier
 from yt_video.providers.image.chain import ImageChain
+from yt_video.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _SEED_STEP = 1009
 _SCENE_SIZE = (1920, 1080)

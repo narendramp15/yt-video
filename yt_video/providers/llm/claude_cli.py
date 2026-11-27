@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import re
 import shutil
 import subprocess
@@ -10,6 +9,7 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from yt_video.models import llm_schema
+from yt_video.logging import get_logger
 from yt_video.providers.llm.base import (
     LLMRequest,
     ProviderError,
@@ -17,7 +17,7 @@ from yt_video.providers.llm.base import (
     extract_json,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Case-insensitive. Deliberately excludes "overloaded"/529 and
 # "Extra usage is required for long context" (Ruling 4): those are plain "exit".

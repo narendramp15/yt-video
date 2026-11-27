@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 import os
 import shutil
 import time
@@ -17,8 +16,9 @@ from yt_video.providers.image.placeholder import PlaceholderProvider
 from yt_video.providers.image.pollinations import PollinationsProvider
 from yt_video.providers.image.validate import validate_image
 from yt_video.settings import Settings
+from yt_video.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ImageChain:
