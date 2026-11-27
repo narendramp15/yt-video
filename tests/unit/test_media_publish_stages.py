@@ -455,3 +455,32 @@ def test_images_stage_records_provider_counts_and_warns_on_placeholders(ctx_afte
     assert data["provider_counts"]["placeholder"] == 3  # thumbnail adds one fake image
     assert data["disabled_providers"] == {"pollinations": 402}
     assert "3/6 scene images are placeholders (pollinations: HTTP 402)" in caplog.text
+
+
+def _images_with_gaps(monkeypatch, drop_n: int):
+    def gappy(chain, verifier, labels, topic, angle, texts, overrides, out_dir):
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        paths = {}
+        for label in labels[drop_n:]:
+            paths[label] = str(out_dir / f"{label}.png")
+            Path(paths[label]).write_bytes(b"png")
+        return paths
+
+    monkeypatch.setattr(media, "generate_scene_images", gappy)
+
+
+def test_images_stage_fails_when_over_20_percent_missing(ctx_after_text, monkeypatch):
+    ctx = ctx_after_text
+    ctx.images.disabled = {"pollinations": 402}
+    _images_with_gaps(monkeypatch, 7)  # 7/30 = 23%
+    with pytest.raises(RuntimeError, match=r"7/30 scene images missing: pollinations disabled: HTTP 402"):
+        media.ImagesStage().run(ctx)
+    assert not ctx.run.is_done("images")
+
+
+def test_images_stage_continues_at_20_percent_missing(ctx_after_text, monkeypatch):
+    ctx = ctx_after_text
+    _images_with_gaps(monkeypatch, 6)  # 6/30 = 20%, not over the threshold
+    media.ImagesStage().run(ctx)
+    assert ctx.run.is_done("images")

@@ -80,6 +80,9 @@ class VoiceStage:
         return None
 
 
+_MAX_MISSING_SCENE_FRACTION = 0.2
+
+
 class ImagesStage:
     name = "images"
 
@@ -96,6 +99,12 @@ class ImagesStage:
             ctx.images, ctx.clip, labels, sel.title, sel.angle, texts, refined,
             ctx.run.path("images"),
         )
+        missing = [lb for lb in labels if lb not in scene_images]
+        if labels and len(missing) / len(labels) > _MAX_MISSING_SCENE_FRACTION:
+            reasons = ", ".join(
+                f"{p} disabled: HTTP {st}" for p, st in ctx.images.disabled.items()
+            ) or "image providers failed"
+            raise RuntimeError(f"{len(missing)}/{len(labels)} scene images missing: {reasons}")
         thumbnail_path: Path | None
         try:
             thumbnail_path = generate_thumbnail(
