@@ -39,8 +39,8 @@ def _pending(variants=VARIANTS) -> dict:
 def _offline(monkeypatch, settings):
     monkeypatch.setattr(cli, "load_settings", lambda: settings)
     monkeypatch.setattr(cli, "_log_claude_version", lambda s: None)
-    monkeypatch.setattr(cli, "build_router", lambda *a, **k: object())
-    monkeypatch.setattr(cli, "build_image_chain", lambda *a, **k: object())
+    monkeypatch.setattr("yt_video.providers.llm.router.build_router", lambda *a, **k: object())
+    monkeypatch.setattr("yt_video.providers.image.chain.build_image_chain", lambda *a, **k: object())
 
 
 @pytest.fixture
@@ -188,18 +188,44 @@ def test_migrate_state_flag(monkeypatch, settings):
 
 def test_list_voices(monkeypatch):
     called = []
-    monkeypatch.setattr(cli, "list_edge_voices", lambda: called.append(1))
+    monkeypatch.setattr("yt_video.providers.tts.list_edge_voices", lambda: called.append(1))
     assert main(["--list-voices"]) == 0
     assert called
 
 
 def test_fetch_analytics(monkeypatch):
-    monkeypatch.setattr(cli, "YouTubeClient", lambda *a, **k: type("Y", (), {"credentials": lambda s: None})())
+    monkeypatch.setattr("yt_video.integrations.youtube.YouTubeClient", lambda *a, **k: type("Y", (), {"credentials": lambda s: None})())
     monkeypatch.setattr(
-        cli, "AnalyticsMemory",
+        "yt_video.memory.analytics_memory.AnalyticsMemory",
         lambda *a, **k: type("A", (), {"fetch_pending": lambda s: 2})(),
     )
     assert main(["--fetch-analytics"]) == 0
+
+
+def test_fetch_analytics_migrates_first(monkeypatch):
+    order = []
+    monkeypatch.setattr(cli, "_ensure_migrated", lambda s: order.append("migrate"))
+    monkeypatch.setattr("yt_video.integrations.youtube.YouTubeClient",
+                        lambda *a, **k: type("Y", (), {"credentials": lambda s: None})())
+
+    def fetch(s):
+        order.append("fetch")
+        return 0
+
+    monkeypatch.setattr("yt_video.memory.analytics_memory.AnalyticsMemory",
+                        lambda *a, **k: type("A", (), {"fetch_pending": fetch})())
+    assert main(["--fetch-analytics"]) == 0
+    assert order == ["migrate", "fetch"]
+
+
+def test_setup_failure_returns_1_and_keeps_run(store, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("no router")
+
+    monkeypatch.setattr("yt_video.providers.llm.router.build_router", boom)
+    assert main([]) == 1
+    run = store.latest_unfinished()
+    assert run is not None and run.status == "running"
 
 
 def test_main_py_shim():

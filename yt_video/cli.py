@@ -9,29 +9,33 @@ import argparse
 import json
 import subprocess
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from yt_video.costs import CostLedger, format_run_summary
-from yt_video.integrations.youtube import YouTubeClient
 from yt_video.logging import add_run_file_handler, get_logger
 from yt_video.media.clip import ClipVerifier
 from yt_video.memory._io import write_json_atomic
-from yt_video.memory.analytics_memory import AnalyticsMemory
 from yt_video.memory.tts_memory import TTSMemory
 from yt_video.migrate import migrate_state, needs_migration
 from yt_video.pipeline.context import RunContext
 from yt_video.pipeline.run_store import Run, RunStateCorruptError, RunStore
 from yt_video.pipeline.runner import Pipeline
-from yt_video.pipeline.stages.publish import ALL_STAGES
-from yt_video.providers.image.chain import build_image_chain
-from yt_video.providers.llm.router import build_router
-from yt_video.providers.tts import list_edge_voices
 from yt_video.settings import PROJECT_ROOT, Settings, load_settings
+
+if TYPE_CHECKING:
+    from yt_video.integrations.youtube import YouTubeClient
+    from yt_video.memory.analytics_memory import AnalyticsMemory
 
 log = get_logger()
 
 PENDING_FILE = "packaging_pending.json"
 EXIT_OK, EXIT_ERROR, EXIT_USAGE, EXIT_AWAITING = 0, 1, 2, 3
+AWAITING_TEXT = (
+    "\nAwaiting packaging approval. Review with --list-packaging, then:\n"
+    "  uv run python main.py --approve-packaging [--variant N]\n"
+    "  uv run python main.py --reject-packaging\n"
+    "and re-run: uv run python main.py"
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -159,6 +163,8 @@ def _packaging_command(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def _youtube(settings: Settings) -> YouTubeClient:
+    from yt_video.integrations.youtube import YouTubeClient
+
     return YouTubeClient(
         settings.youtube_client_secret,
         settings.state_dir / "youtube_token.json",
@@ -168,6 +174,8 @@ def _youtube(settings: Settings) -> YouTubeClient:
 
 
 def _analytics(settings: Settings, youtube: YouTubeClient) -> AnalyticsMemory:
+    from yt_video.memory.analytics_memory import AnalyticsMemory
+
     return AnalyticsMemory(
         settings.state_dir / "yt_analytics_memory.json",
         settings.state_dir / "analytics_log.json",
@@ -175,9 +183,14 @@ def _analytics(settings: Settings, youtube: YouTubeClient) -> AnalyticsMemory:
     )
 
 
-def _pipeline_run(settings: Settings, args: argparse.Namespace) -> int:
+def _ensure_migrated(settings: Settings) -> None:
+    """Copy legacy state once, before any memory file is opened."""
     if needs_migration(settings.state_dir):
         log.info("state migrated: %s", migrate_state(settings.state_dir, PROJECT_ROOT))
+
+
+def _pipeline_run(settings: Settings, args: argparse.Namespace) -> int:
+    _ensure_migrated(settings)
     store = RunStore(settings.runs_dir)
     run, code = _find_unfinished(store, restart=args.restart)
     if code is not None:
@@ -196,6 +209,10 @@ def _pipeline_run(settings: Settings, args: argparse.Namespace) -> int:
 
     handler = add_run_file_handler(run.path("pipeline.log"))
     try:
+        from yt_video.pipeline.stages.publish import ALL_STAGES
+        from yt_video.providers.image.chain import build_image_chain
+        from yt_video.providers.llm.router import build_router
+
         _log_claude_version(settings)
         ledger = CostLedger(settings.state_dir / "costs.db")
         youtube = _youtube(settings)
@@ -213,18 +230,15 @@ def _pipeline_run(settings: Settings, args: argparse.Namespace) -> int:
             no_upload=args.no_upload,
             today=now.date(),
         )
-        try:
-            outcome = Pipeline([stage() for stage in ALL_STAGES]).run(ctx)
-        except Exception:  # noqa: BLE001
-            log.exception("pipeline failed in run %s (re-run to resume)", run.id)
-            return EXIT_ERROR
+        outcome = Pipeline([stage() for stage in ALL_STAGES]).run(ctx)
+    except Exception:  # noqa: BLE001
+        log.exception("pipeline failed in run %s (re-run to resume)", run.id)
+        return EXIT_ERROR
+    else:
         print(format_run_summary(ledger.run_rows(run.id)))
         print(clip.summary())
         if outcome == "awaiting_approval":
-            print("\nAwaiting packaging approval. Review with --list-packaging, then:\n"
-                  "  uv run python main.py --approve-packaging [--variant N]\n"
-                  "  uv run python main.py --reject-packaging\n"
-                  "and re-run: uv run python main.py")
+            print(AWAITING_TEXT)
             return EXIT_AWAITING
         return EXIT_OK
     finally:
@@ -249,6 +263,8 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_USAGE
 
     if args.list_voices:
+        from yt_video.providers.tts import list_edge_voices
+
         print("\nAvailable Microsoft Edge TTS voices (English):\n")
         list_edge_voices()
         return EXIT_OK
@@ -261,6 +277,7 @@ def main(argv: list[str] | None = None) -> int:
     if any(packaging):
         return _packaging_command(settings, args)
     if args.fetch_analytics:
+        _ensure_migrated(settings)
         fetched = _analytics(settings, _youtube(settings)).fetch_pending()
         if fetched:
             log.info("Done. %s video(s) analyzed.", fetched)
