@@ -201,6 +201,32 @@ def _ensure_migrated(settings: Settings) -> None:
         log.info("state migrated: %s", migrate_state(settings.state_dir, PROJECT_ROOT))
 
 
+def _warn(message: str) -> None:
+    """Console-visible warning (also logged)."""
+    print(f"WARNING: {message}")
+    log.warning(message)
+
+
+def _print_run_summary(run: Run, ledger: CostLedger | None, clip: ClipVerifier | None) -> None:
+    """Cost, clip and image summary. Never raises and never changes the exit code."""
+    try:
+        if ledger is not None:
+            print(format_run_summary(ledger.run_rows(run.id)))
+        if clip is not None:
+            print(clip.summary())
+        print(format_image_summary(run.get("images")))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("run summary unavailable: %s", exc)
+
+
+def _close_router(router: Any) -> None:
+    """Best-effort removal of the router's temp dirs."""
+    try:
+        router.close()
+    except Exception as exc:  # noqa: BLE001
+        log.debug("router cleanup skipped: %s", exc)
+
+
 def _pipeline_run(settings: Settings, args: argparse.Namespace) -> int:
     _ensure_migrated(settings)
     store = RunStore(settings.runs_dir)
@@ -209,6 +235,10 @@ def _pipeline_run(settings: Settings, args: argparse.Namespace) -> int:
         return code
     now = datetime.now()
     if run is not None and args.restart:
+        video_id = (run.get("publish") or {}).get("video_id")
+        if video_id:
+            _warn(f"--restart discards run {run.id}, which already uploaded video {video_id}; "
+                  "that video stays on YouTube and a new upload will follow")
         log.info("--restart: discarding run %s", run.id)
         store.discard(run)
         run = None
@@ -218,8 +248,15 @@ def _pipeline_run(settings: Settings, args: argparse.Namespace) -> int:
         run = None
     if run is None:
         run = store.create(now)
+    elif run.no_upload is not None and run.no_upload != args.no_upload:
+        _warn(f"run {run.id} was started with no-upload={run.no_upload}; "
+              f"resuming with no-upload={args.no_upload} (current flag wins)")
+    run.set_no_upload(args.no_upload)
 
     handler = None
+    ledger = clip = router = None
+    failed = False
+    outcome = None
     try:
         handler = add_run_file_handler(run.path("pipeline.log"))
         from yt_video.pipeline.stages.publish import ALL_STAGES
@@ -230,10 +267,11 @@ def _pipeline_run(settings: Settings, args: argparse.Namespace) -> int:
         ledger = CostLedger(settings.state_dir / "costs.db")
         youtube = _youtube(settings)
         clip = ClipVerifier(settings.clip_verify, settings.clip_min_score, settings.clip_model)
+        router = build_router(settings, ledger, run.id, args.claude_only)
         ctx = RunContext(
             settings=settings,
             run=run,
-            router=build_router(settings, ledger, run.id, args.claude_only),
+            router=router,
             images=build_image_chain(settings, ledger, run.id),
             clip=clip,
             tts_memory=TTSMemory(settings.state_dir / "tts_style_memory.json"),
@@ -246,22 +284,19 @@ def _pipeline_run(settings: Settings, args: argparse.Namespace) -> int:
         outcome = Pipeline([stage() for stage in ALL_STAGES]).run(ctx)
     except Exception:  # noqa: BLE001
         log.exception("pipeline failed in run %s (re-run to resume)", run.id)
-        return EXIT_ERROR
-    else:
-        try:
-            print(format_run_summary(ledger.run_rows(run.id)))
-            print(clip.summary())
-            print(format_image_summary(run.get("images")))
-        except Exception as exc:  # noqa: BLE001 - summary never changes the outcome
-            log.warning("run summary unavailable: %s", exc)
-        if outcome == "awaiting_approval":
-            print(AWAITING_TEXT)
-            return EXIT_AWAITING
-        return EXIT_OK
+        failed = True
     finally:
+        _print_run_summary(run, ledger, clip)
+        _close_router(router)
         if handler is not None:
             get_logger().removeHandler(handler)
             handler.close()
+    if failed:
+        return EXIT_ERROR
+    if outcome == "awaiting_approval":
+        print(AWAITING_TEXT)
+        return EXIT_AWAITING
+    return EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:

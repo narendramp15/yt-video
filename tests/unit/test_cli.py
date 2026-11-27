@@ -274,3 +274,70 @@ def test_done_prints_image_summary(monkeypatch, capsys):
         "images", {"provider_counts": {"pollinations": 4}, "disabled_providers": {}}) or "done")
     assert main(["--no-upload", "--claude-only"]) == 0
     assert "Images: pollinations 4" in capsys.readouterr().out
+
+
+def test_pipeline_failure_still_prints_summary_and_exits_1(monkeypatch, capsys):
+    def boom(self, ctx):
+        raise RuntimeError("stage blew up")
+
+    monkeypatch.setattr(Pipeline, "run", boom)
+    assert main([]) == 1
+    assert "Images:" in capsys.readouterr().out
+
+
+def test_summary_failure_after_pipeline_error_keeps_exit_1(monkeypatch):
+    def boom(self, ctx):
+        raise RuntimeError("stage blew up")
+
+    monkeypatch.setattr(Pipeline, "run", boom)
+    monkeypatch.setattr(cli, "format_run_summary", lambda rows: 1 / 0)
+    assert main([]) == 1
+
+
+def test_no_upload_is_stored_in_run_json(store, monkeypatch):
+    monkeypatch.setattr(Pipeline, "run", lambda self, ctx: "done")
+    assert main(["--no-upload"]) == 0
+    run_dir = sorted(store.runs_dir.iterdir())[-1]
+    state = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    assert state["no_upload"] is True
+
+
+def test_resume_with_different_no_upload_warns_and_honours_current(store, monkeypatch, capsys):
+    run = store.create(datetime(2026, 1, 1, 10, 0, 0))
+    run.set_no_upload(True)
+    seen = []
+    monkeypatch.setattr(Pipeline, "run", lambda self, ctx: seen.append(ctx.no_upload) or "done")
+    assert main([]) == 0
+    out = capsys.readouterr().out
+    assert "WARNING" in out and "no-upload" in out
+    assert seen == [False]
+
+
+def test_resume_with_same_no_upload_does_not_warn(store, monkeypatch, capsys):
+    run = store.create(datetime(2026, 1, 1, 10, 0, 0))
+    run.set_no_upload(True)
+    monkeypatch.setattr(Pipeline, "run", lambda self, ctx: "done")
+    assert main(["--no-upload"]) == 0
+    assert "WARNING" not in capsys.readouterr().out
+
+
+def test_restart_with_uploaded_video_warns_with_id_then_proceeds(store, monkeypatch, capsys):
+    old = store.create(datetime(2026, 1, 1, 10, 0, 0))
+    old.save_partial("publish", {"video_id": "abc123"})
+    monkeypatch.setattr(Pipeline, "run", lambda self, ctx: "done")
+    assert main(["--restart"]) == 0
+    assert "abc123" in capsys.readouterr().out
+    assert not old.dir.exists()
+
+
+def test_router_is_closed_after_run(monkeypatch):
+    closed = []
+
+    class R:
+        def close(self):
+            closed.append(1)
+
+    monkeypatch.setattr("yt_video.providers.llm.router.build_router", lambda *a, **k: R())
+    monkeypatch.setattr(Pipeline, "run", lambda self, ctx: "done")
+    assert main([]) == 0
+    assert closed == [1]

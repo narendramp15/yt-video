@@ -73,6 +73,16 @@ class Run:
     def slug(self) -> str | None:
         return self._state.get("slug")
 
+    @property
+    def no_upload(self) -> bool | None:
+        """The ``--no-upload`` value last used with this run; None if never stored."""
+        value = self._state.get("no_upload")
+        return value if isinstance(value, bool) else None
+
+    def set_no_upload(self, value: bool) -> None:
+        self._state["no_upload"] = value
+        self._save()
+
     def set_slug(self, slug: str) -> None:
         self._state["slug"] = slug
         self._save()
