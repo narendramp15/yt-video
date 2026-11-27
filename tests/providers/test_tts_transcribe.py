@@ -91,3 +91,17 @@ def test_transcribe_fallback_records_ledger(tmp_path, monkeypatch):
         "select stage, kind, cost_usd, fallback_reason from calls"
     ).fetchone()
     assert row == ("transcribe", "transcribe", 0.006, "faster_whisper_unavailable")
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("text", ["", "   \n\t "])
+def test_generate_voice_rejects_empty_text(tmp_path, text):
+    from yt_video.providers import tts
+    from yt_video.settings import Settings
+
+    out = tmp_path / "v.mp3"
+    with pytest.raises(ValueError, match="empty"):
+        tts.generate_voice(text, out, Settings(_env_file=None), {})
+    assert not out.exists()

@@ -198,8 +198,10 @@ def generate_voice(
 ) -> Path:
     """Synthesize ``text`` to ``out_path`` (Edge TTS, then OpenAI TTS) and return it."""
     out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
     cleaned = _clean_for_tts(apply_corrections(text, corrections))
+    if not cleaned.strip():
+        raise ValueError("TTS text is empty: refusing to write a 0-byte audio file")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
         _generate_edge(cleaned, out_path, settings)
