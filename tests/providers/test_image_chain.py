@@ -8,6 +8,7 @@ import pytest
 from PIL import Image
 
 from yt_video.costs import CostLedger
+from yt_video.providers.image.base import NonRetryableProviderError
 from yt_video.providers.image.chain import ImageChain, build_image_chain
 from yt_video.providers.image.cloudflare import CloudflareProvider
 from yt_video.providers.image.fake import FakeImageProvider
@@ -205,3 +206,52 @@ def test_invalid_cache_entry_is_deleted_and_refetched(tmp_path):
     assert not result.cached and p.calls == 1
     assert (tmp_path / "cache" / f"{key}.img").read_bytes() == _good_png()
     assert not list((tmp_path / "cache").glob("*.tmp"))
+
+
+# ---- non-retryable failures (paywall/auth) -------------------------------------
+
+
+class _Status(_Resp):
+    def __init__(self, status):
+        super().__init__()
+        self.status_code = status
+
+    def raise_for_status(self):
+        raise RuntimeError(f"HTTP {self.status_code}")
+
+
+class _Paywalled(FakeImageProvider):
+    def generate(self, prompt, width, height, seed):
+        self.calls += 1
+        raise NonRetryableProviderError(self.name, 402)
+
+
+@pytest.mark.parametrize("status", [401, 402, 403, 404])
+def test_pollinations_raises_non_retryable(status):
+    provider = PollinationsProvider("flux", None, http_get=lambda *a, **k: _Status(status))
+    with pytest.raises(NonRetryableProviderError) as exc:
+        provider.generate("p", 10, 10, 1)
+    assert exc.value.status == status
+
+
+def test_pollinations_server_error_still_returns_none():
+    assert PollinationsProvider("flux", None, http_get=lambda *a, **k: _Status(500)).generate("p", 10, 10, 1) is None
+
+
+def test_cloudflare_raises_non_retryable_on_401():
+    provider = CloudflareProvider("a", "t", http_post=lambda *a, **k: _Status(401))
+    with pytest.raises(NonRetryableProviderError):
+        provider.generate("p", 10, 10, 1)
+
+
+def test_non_retryable_calls_provider_once_and_disables_it(tmp_path, caplog):
+    sleeps: list[float] = []
+    poll = _Paywalled(name="pollinations")
+    chain = ImageChain([poll, PlaceholderProvider()], tmp_path / "cache", sleep=sleeps.append)
+    with caplog.at_level("WARNING"):
+        results = [chain.generate("p", 320, 180, i, tmp_path / f"i{i}.jpg") for i in range(3)]
+    assert poll.calls == 1 and sleeps == []
+    assert all(r.provider == "placeholder" for r in results)
+    assert chain.provider_counts == {"placeholder": 3}
+    assert chain.disabled == {"pollinations": 402}
+    assert sum("disabled for this run" in r.message for r in caplog.records) == 1

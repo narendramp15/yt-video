@@ -5,6 +5,8 @@ import base64
 import io
 
 import requests
+
+from yt_video.providers.image.base import NON_RETRYABLE_STATUSES, NonRetryableProviderError
 from yt_video.logging import get_logger
 
 logger = get_logger(__name__)
@@ -33,9 +35,14 @@ class CloudflareProvider:
                 json={"prompt": prompt, "steps": 4},
                 timeout=90,
             )
+            status = getattr(response, "status_code", None)
+            if status in NON_RETRYABLE_STATUSES:
+                raise NonRetryableProviderError(self.name, status)
             response.raise_for_status()
             raw = base64.b64decode(response.json()["result"]["image"])
             return _fit(raw, width, height)
+        except NonRetryableProviderError:
+            raise
         except Exception as exc:
             logger.warning("cloudflare fetch failed: %s", exc)
             return None

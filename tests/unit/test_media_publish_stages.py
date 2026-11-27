@@ -443,3 +443,15 @@ def test_category_default_comes_from_settings(ctx_after_text, monkeypatch):
     _run(ctx)
     assert seen and set(seen) == {"24"}
     assert ctx.youtube.uploads[0]["category_id"] == "24"
+
+
+def test_images_stage_records_provider_counts_and_warns_on_placeholders(ctx_after_text, caplog):
+    ctx = ctx_after_text
+    ctx.images.provider_counts = {"pollinations": 2, "placeholder": 3}
+    ctx.images.disabled = {"pollinations": 402}
+    with caplog.at_level("WARNING"):
+        media.ImagesStage().run(ctx)
+    data = ctx.run.get("images")
+    assert data["provider_counts"]["placeholder"] == 3  # thumbnail adds one fake image
+    assert data["disabled_providers"] == {"pollinations": 402}
+    assert "3/6 scene images are placeholders (pollinations: HTTP 402)" in caplog.text

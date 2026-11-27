@@ -106,11 +106,20 @@ class ImagesStage:
         except Exception as exc:  # noqa: BLE001 - non-fatal
             log.warning("thumbnail generation failed (non-fatal): %s", exc)
             thumbnail_path = None
+        counts = dict(ctx.images.provider_counts)
+        disabled = dict(ctx.images.disabled)
+        placeholders = counts.get("placeholder", 0)
+        if placeholders:
+            total = sum(counts.values())
+            reasons = ", ".join(f"{p}: HTTP {s}" for p, s in disabled.items()) or "providers failed"
+            log.warning("%d/%d scene images are placeholders (%s)", placeholders, total, reasons)
         ctx.run.mark_done(
             self.name,
             {
                 "scene_images": {k: str(v) for k, v in scene_images.items()},
                 "thumbnail_path": str(thumbnail_path) if thumbnail_path else None,
+                "provider_counts": counts,
+                "disabled_providers": disabled,
             },
         )
         return None

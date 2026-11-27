@@ -9,7 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from yt_video.costs import CostLedger
-from yt_video.providers.image.base import ImageProvider, ImageResult
+from yt_video.providers.image.base import ImageProvider, ImageResult, NonRetryableProviderError
 from yt_video.providers.image.cloudflare import CloudflareProvider
 from yt_video.providers.image.openai_image import OpenAIImageProvider
 from yt_video.providers.image.placeholder import PlaceholderProvider
@@ -33,6 +33,8 @@ class ImageChain:
         self.cache_dir = Path(cache_dir)
         self.retries = retries
         self._sleep = sleep
+        self.provider_counts: dict[str, int] = {}
+        self.disabled: dict[str, int] = {}
 
     @staticmethod
     def _key(provider: ImageProvider, prompt: str, width: int, height: int, seed: int) -> str:
@@ -43,7 +45,15 @@ class ImageChain:
         """Call one provider with retry + backoff (v1: 3 attempts, 5s * attempt)."""
         check = getattr(provider, "validated", True)
         for attempt in range(1, self.retries + 1):
-            data = provider.generate(prompt, width, height, seed)
+            try:
+                data = provider.generate(prompt, width, height, seed)
+            except NonRetryableProviderError as exc:
+                self.disabled[provider.name] = exc.status
+                logger.warning(
+                    "image provider %s disabled for this run: HTTP %d (not retryable)",
+                    provider.name, exc.status,
+                )
+                return None
             if data:
                 reason = validate_image(data, width, height) if check else None
                 if reason is None:
@@ -55,11 +65,14 @@ class ImageChain:
                 self._sleep(5 * attempt)
         return None
 
+    def _count(self, name: str) -> None:
+        self.provider_counts[name] = self.provider_counts.get(name, 0) + 1
+
     def generate(self, prompt: str, width: int, height: int, seed: int, out_path: Path) -> ImageResult:
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         for provider in self.providers:
-            if not provider.available():
+            if not provider.available() or provider.name in self.disabled:
                 continue
             cacheable = getattr(provider, "cacheable", True)
             cache_file = self.cache_dir / f"{self._key(provider, prompt, width, height, seed)}.img"
@@ -68,6 +81,7 @@ class ImageChain:
                 reason = validate_image(cached, width, height)
                 if reason is None:
                     shutil.copyfile(cache_file, out_path)
+                    self._count(provider.name)
                     return ImageResult(out_path, provider.name, True)
                 logger.warning("discarding invalid cache entry %s: %s", cache_file.name, reason)
                 cache_file.unlink(missing_ok=True)
@@ -81,6 +95,7 @@ class ImageChain:
                 tmp.write_bytes(data)
                 os.replace(tmp, cache_file)
             out_path.write_bytes(data)
+            self._count(provider.name)
             return ImageResult(out_path, provider.name, False)
         raise RuntimeError("all image providers failed or were unavailable")
 

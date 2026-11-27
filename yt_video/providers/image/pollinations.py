@@ -4,6 +4,8 @@ from __future__ import annotations
 from urllib.parse import quote
 
 import requests
+
+from yt_video.providers.image.base import NON_RETRYABLE_STATUSES, NonRetryableProviderError
 from yt_video.logging import get_logger
 
 logger = get_logger(__name__)
@@ -28,11 +30,16 @@ class PollinationsProvider:
         headers = {"Authorization": f"Bearer {self._key}"} if self._key else {}
         try:
             response = self._get(url, headers=headers, timeout=90)
+            status = getattr(response, "status_code", None)
+            if status in NON_RETRYABLE_STATUSES:
+                raise NonRetryableProviderError(self.name, status)
             response.raise_for_status()
             content_type = response.headers.get("Content-Type", "")
             if "image" not in content_type:
                 raise ValueError(f"unexpected content-type: {content_type}")
             return response.content
+        except NonRetryableProviderError:
+            raise
         except Exception as exc:
             logger.warning("pollinations fetch failed: %s", exc)
             return None

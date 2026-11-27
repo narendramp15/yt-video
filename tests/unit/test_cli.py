@@ -257,3 +257,20 @@ def test_main_py_shim():
         cwd=PROJECT_ROOT, capture_output=True, text=True, encoding="utf-8", timeout=120,
     )
     assert proc.returncode == 2, proc.stderr
+
+
+def test_image_summary_line():
+    from yt_video.cli import format_image_summary
+
+    line = format_image_summary(
+        {"provider_counts": {"pollinations": 30, "placeholder": 2}, "disabled_providers": {"pollinations": 402}}
+    )
+    assert line == "Images: pollinations 30, placeholder 2 (pollinations disabled: HTTP 402)"
+    assert format_image_summary(None) == "Images: none"
+
+
+def test_done_prints_image_summary(monkeypatch, capsys):
+    monkeypatch.setattr(Pipeline, "run", lambda self, ctx: ctx.run.mark_done(
+        "images", {"provider_counts": {"pollinations": 4}, "disabled_providers": {}}) or "done")
+    assert main(["--no-upload", "--claude-only"]) == 0
+    assert "Images: pollinations 4" in capsys.readouterr().out

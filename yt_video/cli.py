@@ -38,6 +38,18 @@ AWAITING_TEXT = (
 )
 
 
+def format_image_summary(images_data: dict[str, Any] | None) -> str:
+    """One line: which image providers served the run, and which were disabled."""
+    data = images_data or {}
+    counts = data.get("provider_counts") or {}
+    served = ", ".join(f"{p} {n}" for p, n in counts.items()) or "none"
+    line = f"Images: {served}"
+    disabled = data.get("disabled_providers") or {}
+    if disabled:
+        line += " (" + "; ".join(f"{p} disabled: HTTP {s}" for p, s in disabled.items()) + ")"
+    return line
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="yt-video: automated YouTube pipeline",
@@ -239,6 +251,7 @@ def _pipeline_run(settings: Settings, args: argparse.Namespace) -> int:
         try:
             print(format_run_summary(ledger.run_rows(run.id)))
             print(clip.summary())
+            print(format_image_summary(run.get("images")))
         except Exception as exc:  # noqa: BLE001 - summary never changes the outcome
             log.warning("run summary unavailable: %s", exc)
         if outcome == "awaiting_approval":
