@@ -484,3 +484,36 @@ def test_images_stage_continues_at_20_percent_missing(ctx_after_text, monkeypatc
     _images_with_gaps(monkeypatch, 6)  # 6/30 = 20%, not over the threshold
     media.ImagesStage().run(ctx)
     assert ctx.run.is_done("images")
+
+
+# ------------------------------------------------------------ gate (I4)
+
+
+@pytest.mark.parametrize("value", ["true", "false", 1, "yes"])
+def test_non_boolean_approved_values_still_wait(ctx_after_text, value):
+    ctx = ctx_after_text
+    _pending(ctx, approved=value)
+    assert _run(ctx) == "awaiting_approval"
+    assert ctx.youtube.calls == []
+
+
+def test_rejected_wins_over_approved(ctx_after_text):
+    ctx = ctx_after_text
+    _pending(ctx, approved=True, rejected=True)
+    assert _run(ctx) == "done"
+    assert [u["privacy_status"] for u in ctx.youtube.uploads] == ["private", "private"]
+    assert ctx.run.get("publish")["privacy"] == "private"
+
+
+def test_wait_then_cli_approve_then_rerun_uploads(ctx_after_text, settings, monkeypatch):
+    from yt_video import cli
+
+    ctx = ctx_after_text
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+    assert _run(ctx) == "awaiting_approval"
+    assert ctx.youtube.calls == []
+    assert cli.main(["--approve-packaging"]) == cli.EXIT_OK
+    assert read_json(ctx.run.path("packaging_pending.json"))["approved"] is True
+    assert _run(ctx) == "done"
+    assert ctx.youtube.uploads[0]["privacy_status"] == "public"
+    assert ctx.run.get("publish")["video_id"] == "vid1"
