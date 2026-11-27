@@ -34,7 +34,7 @@ The cost ledger has no TTS, transcribe or image rows (all free or local). Total 
 | Artifact | Result |
 |---|---|
 | Long mp4 | h264 1920x1080 + aac, 645.59 s. Voice mp3 645.55 s (diff 0.04 s). Burned captions visible in frames. |
-| Shorts mp4 | h264 1080x1920 + aac, **94.46 s**. Captions visible, but the frame at 80 % is solid black (Defect D8). |
+| Shorts mp4 | h264 1080x1920 + aac, **94.46 s**. Captions visible, but the frame at 80 % is solid black (Defect D8, fixed in round 3; see below). |
 | Thumbnail | The run's `thumbnail.jpg` was 1024x576 (Pollinations cap). Fixed in code (fix 6); regenerated from cache into scratch: 1280x720 with hook text "MR IPL DECODED". |
 | Scene images | 27 of 27 labels from pollinations, 1024x576 native (free-tier cap), upscaled in render. A "pollinations.ai" logo is baked into the bottom-right corner (free tier ignores `nologo=true`); visible in video frames and the thumbnail. A Pollinations key is needed. |
 
@@ -45,14 +45,14 @@ The cost ledger has no TTS, transcribe or image rows (all free or local). Total 
 | Trend sources: pytrends, RSS, X trends scrape, yfinance news | Partial | Log: trends24.in 25 topics; RSS 5 headlines; yfinance 0 headlines; Google Trends (pytrends) 429, logged as WARNING and skipped. Combined 32 signals. |
 | LLM topic ranking, rerank, niche lock, recent-topic dedupe | Pass (ran) | `rank_topics` on claude_cli/haiku; selected "Mr. IPL", score 8.0. Rerank internals covered by unit tests only. |
 | Format pick + format-to-playlist mapping | Pass | run.json: `format_id=what_changed`, `playlist_title="What Changed This Week"`. Playlist add not exercised (no upload). |
-| One-call script (long with `[SCENE:label]`, Shorts, SEO, scene prompts, thumbnail prompt) | Pass | run.json `write_script`: 7 keys, 27 scene prompts, tags. Markers did not leak into the transcript (0 "scene" matches); see D9. |
+| One-call script (long with `[SCENE:label]`, Shorts, SEO, scene prompts, thumbnail prompt) | Pass | run.json `write_script`: 7 keys, 27 scene prompts, tags. Markers did not leak into the transcript (0 "scene" matches); see D9 (fixed). |
 | Packaging A/B variants, scoring, pending file, approve/reject/list/variant CLI | Partial | 3 variants scored, winner v1 (5.5). Gate / pending file not exercised (`--no-upload` skips publish). CLI approve/reject not run. |
 | AI review score + safety; `decide_privacy` | Partial | review 82/100, safety Yes. `decide_privacy` not exercised (publish skipped). |
 | Edge TTS with prosody + corrections; OpenAI TTS fallback | Pass (Edge) / Not exercised (OpenAI) | Log: `Edge TTS: voice=en-IN-PrabhatNeural rate=-8% pitch=+1Hz chunks=3`. OpenAI TTS failed only because the key is invalid (401). |
 | Scene images topic-aware, unique seeds, CLIP verify, thumbnail with hook text | Partial | 27 scene images + thumbnail with hook text. CLIP not exercised: torch not installed (degraded to disabled, as designed). |
-| faster-whisper word timestamps, scene timeline, SRT, burned captions | Pass | 1198 words from 645.6 s; SRT 270 cues; Shorts SRT 43 cues; captions burned. Timeline fell back to proportional (D10). |
+| faster-whisper word timestamps, scene timeline, SRT, burned captions | Pass | 1198 words from 645.6 s; SRT 270 cues; Shorts SRT 43 cues; captions burned. Timeline refined from word timestamps (D10: not a defect). |
 | TTS memory learning (non-fatal) | Pass | Log: `tts_memory updated (run #5)`. |
-| Long 16:9 Ken Burns render + optional music; Shorts 9:16 first 6 scenes | Pass, with D8 | Long OK; no music track found, voice only (expected). Shorts uses 6 images, but see D8. |
+| Long 16:9 Ken Burns render + optional music; Shorts 9:16 first 6 scenes | Pass; D8 fixed in round 3 | Long OK; no music track found, voice only (expected). Shorts uses 6 images, but see D8. |
 | Upload long + Shorts, chapters, Up-next, category, pinned comment, playlist, X post | Not exercised | `--no-upload`; never run. |
 | `record_video` / `--fetch-analytics` | Not exercised | No YouTube token. |
 | CLI flags | Partial | `--no-upload` and default resume used. The rest are covered by unit tests only. |
@@ -68,8 +68,8 @@ Fixed, each with its own commit and a regression test:
 7. Default Pollinations model changed to `flux` (`flux-realism` 402 was probably the same rate limit; the change is harmless).
 
 Open (need a design decision or owner action; not fixed):
-- D8. Shorts: the voice mp3 is 94 s but `create_shorts_video` caps audio and background at 55 s. The caption overlays run to 94 s, so the composite is 94 s long with a black tail and captions over black (the v1 code has the same logic). Either bound the Shorts script word count so the voice fits, or truncate the composite and captions at the cap.
-- D9. The review stage saw `[SCENE:...]` tags in the script and flagged them as a required fix. Confirm the reviewer should get the stripped script.
-- D10. The scene timeline fell back to proportional timing even though whisper returned 1198 words (scene markers are stripped from the narration, so they cannot be matched). Not verified whether v1 behaves the same.
+- D8 (fixed, round 3). Shorts cap raised from 55 s to `SHORTS_MAX_DURATION_S = 175` and audio, background and caption cues now share one capped duration (a WARNING with both durations is logged on truncation). Verified on the real run assets by re-rendering only the Shorts into scratch: 1080x1920, 95.56 s (voice length), frame at 76 s shows an image with its caption, no black tail.
+- D9 (fixed, round 3). The review stage now sends `strip_scene_markers(long_script)`; regression test asserts no `[SCENE:` in the review prompt.
+- D10 (not a defect; no code change). The "Proportional scene timeline" INFO lines are only the baseline log printed before refinement. Offline replay on the run's saved transcript words and `long_script`: 22 of 27 scenes were refined by word timestamps (e.g. intro 0.0 to 23.08 s, s1 31.04 to 51.86 s), the saved `_timeline.json` shows the refined values, and v1 `_refine_with_whisper(_proportional_timeline(...))` returns an identical 27-entry timeline to v2 `align_scenes` on the same inputs.
 - Owner: `.env` has `POLLINATIONS_MODEL=flux-realism` and `IMAGE_PROVIDERS=pollinations` (no placeholder); `OPENAI_API_KEY` is invalid; the Pollinations free tier bakes a logo into images and caps at 1024x576 (a key fixes both and removes the 45 s pacing).
 - The long render runs at about 2 fps (about 2.2 h for 10.8 min of video) on this CPU, the same MoviePy path as v1.
