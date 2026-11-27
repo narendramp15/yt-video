@@ -10,6 +10,7 @@ def test_defaults(tmp_path):
     assert s.openai_fallback_model == "gpt-6-luna"
     assert s.image_providers == ["pollinations", "cloudflare", "placeholder"]
     assert s.pollinations_model == "flux"  # flux-realism now 402s on the keyless tier
+    assert s.pollinations_min_interval_s == 45
     assert s.openai_api_key is None
     assert s.openai_pricing["gpt-6-luna"] == (0.10, 0.50)
 

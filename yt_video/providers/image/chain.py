@@ -104,7 +104,10 @@ def build_image_chain(settings: Settings, ledger: CostLedger | None = None, run_
     providers: list[ImageProvider] = []
     for name in settings.image_providers:
         if name == "pollinations":
-            providers.append(PollinationsProvider(settings.pollinations_model, settings.pollinations_key))
+            providers.append(PollinationsProvider(
+                settings.pollinations_model, settings.pollinations_key,
+                min_interval_s=settings.pollinations_min_interval_s,
+            ))
         elif name == "cloudflare":
             providers.append(CloudflareProvider(settings.cloudflare_account_id, settings.cloudflare_api_token))
         elif name == "placeholder":

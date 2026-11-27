@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     image_providers: CommaList = ["pollinations", "cloudflare", "placeholder"]
     pollinations_model: str = "flux"
     pollinations_key: str | None = None
+    pollinations_min_interval_s: float = 45.0
     openai_image_model: str = "gpt-image-1"
     openai_image_quality: str = "low"
     cloudflare_account_id: str | None = None

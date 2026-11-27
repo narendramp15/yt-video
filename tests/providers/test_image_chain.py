@@ -255,3 +255,68 @@ def test_non_retryable_calls_provider_once_and_disables_it(tmp_path, caplog):
     assert chain.provider_counts == {"placeholder": 3}
     assert chain.disabled == {"pollinations": 402}
     assert sum("disabled for this run" in r.message for r in caplog.records) == 1
+
+
+# ---- Pollinations free-tier rate limit -----------------------------------------
+
+_FREE_LIMIT = (
+    '{"status":402,"success":false,"error":{"code":"FREE_LIMIT","message":'
+    '"Free limit reached: 1 image every 45 seconds per IP. Retry after 28s"}}'
+)
+
+
+class _Limited(_Resp):
+    def __init__(self, status=402, text=_FREE_LIMIT):
+        super().__init__()
+        self.status_code, self.text = status, text
+
+    def raise_for_status(self):
+        raise RuntimeError(f"HTTP {self.status_code}")
+
+
+def test_free_limit_waits_parsed_seconds_then_succeeds_without_disabling():
+    responses = [_Limited(), _Resp(b"\xff\xd8img", {"Content-Type": "image/jpeg"})]
+    sleeps: list[float] = []
+    provider = PollinationsProvider(
+        "flux", None, http_get=lambda *a, **k: responses.pop(0), sleep=sleeps.append
+    )
+    assert provider.generate("p", 10, 10, 1) == b"\xff\xd8img"
+    assert sleeps == [30.0]  # parsed 28 s + 2 s margin
+
+
+def test_free_limit_unparsable_uses_default_and_gives_up_after_three_waits():
+    sleeps: list[float] = []
+    provider = PollinationsProvider(
+        "flux", None, http_get=lambda *a, **k: _Limited(429, "FREE_LIMIT"), sleep=sleeps.append
+    )
+    assert provider.generate("p", 10, 10, 1) is None  # returned None, not NonRetryable
+    assert sleeps == [47.0, 47.0, 47.0]
+
+
+def test_paywall_402_without_rate_limit_body_is_still_non_retryable():
+    provider = PollinationsProvider(
+        "flux-pro", None, http_get=lambda *a, **k: _Limited(402, '{"error":"model requires a key"}'),
+        sleep=lambda s: None,
+    )
+    with pytest.raises(NonRetryableProviderError):
+        provider.generate("p", 10, 10, 1)
+
+
+def test_pacing_spaces_requests_and_is_off_with_a_key():
+    now = [100.0]
+    sleeps: list[float] = []
+
+    def sleep(s):
+        sleeps.append(s)
+        now[0] += s
+
+    ok = lambda *a, **k: _Resp(b"\xff\xd8x", {"Content-Type": "image/jpeg"})  # noqa: E731
+    paced = PollinationsProvider("flux", None, http_get=ok, min_interval_s=45, sleep=sleep, clock=lambda: now[0])
+    paced.generate("p", 10, 10, 1)
+    now[0] += 10
+    paced.generate("p", 10, 10, 2)
+    assert sleeps == [35.0]
+    keyed = PollinationsProvider("flux", "k", http_get=ok, min_interval_s=45, sleep=sleep, clock=lambda: now[0])
+    keyed.generate("p", 10, 10, 1)
+    keyed.generate("p", 10, 10, 2)
+    assert sleeps == [35.0]
