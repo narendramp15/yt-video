@@ -12,7 +12,7 @@ dependencies = [
     "pydantic-settings>=2.3",
 
     # FREE TTS — Microsoft Edge TTS
-    "edge-tts>=6.1.9",
+    "edge-tts>=7.3.1",
     "pydub>=0.25.1",
 
     # FREE trend signals
