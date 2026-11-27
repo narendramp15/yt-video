@@ -31,6 +31,17 @@ USAGE_LIMIT_PATTERNS: tuple[str, ...] = (
 )
 _LONG_CONTEXT_RE = re.compile(r"extra usage is required for long context", re.IGNORECASE)
 _LIMIT_RE = re.compile("|".join(USAGE_LIMIT_PATTERNS), re.IGNORECASE)
+# Success-path (rc==0) overage notices only. Narrower than _LIMIT_RE on purpose: bare
+# ``rate_limit`` and ``credit balance is too low`` are omitted because a 429 that
+# recovered on retry is logged to stderr on a normal success (Ruling 24).
+_SUCCESS_OVERAGE_RE = re.compile(
+    "|".join((
+        r"hit your .{0,30}limit",
+        r"usage limit reached",
+        r"extra usage(?! is required for long context)",
+    )),
+    re.IGNORECASE,
+)
 _LIMIT_STATUSES = {429, 402}
 _EXCERPT = 300
 
@@ -98,10 +109,13 @@ def _classify_limit(
 def _success_overage(env: dict, stderr: str) -> bool:
     """Overage notice on a successful call. UNVERIFIED: the shapes below are not
     confirmed against a real overage run (fixtures are synthetic). Scans stderr
-    only, never ``result``; ``usage.fallback_credit`` is null on real success
-    fixtures, so any truthy value is treated as a soft overage flag.
+    only, never ``result``, and uses the narrower ``_SUCCESS_OVERAGE_RE`` instead of
+    ``_LIMIT_RE``: a call that recovered from a temporary 429 is a normal success
+    and may log ``rate_limit`` to stderr, which must not trip the breaker.
+    ``usage.fallback_credit`` is null on real success fixtures, so any truthy value
+    is treated as a soft overage flag.
     """
-    if _LIMIT_RE.search(stderr or ""):
+    if _SUCCESS_OVERAGE_RE.search(stderr or ""):
         return True
     usage = env.get("usage")
     return isinstance(usage, dict) and bool(usage.get("fallback_credit"))

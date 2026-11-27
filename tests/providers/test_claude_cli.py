@@ -256,6 +256,27 @@ def test_success_with_truthy_fallback_credit_flags_overage():
     assert parse_claude_envelope(json.dumps(env), "", 0).overage is True
 
 
+def test_success_recovered_429_retry_stderr_is_not_overage():
+    # Ruling 24: a 429 that recovered on retry is a normal success, not a limit.
+    stderr = "API Error: 429 rate_limit_error · Retrying in 2s…"
+    raw = parse_claude_envelope(json.dumps(_bare("success_text")), stderr, 0)
+    assert raw.overage is False and raw.text == "ok"
+
+
+@pytest.mark.parametrize(
+    "stderr, expected",
+    [
+        ("You've hit your limit · resets 3pm", True),
+        ("Usage limit reached", True),
+        ("Now using extra usage", True),
+        ("Extra usage is required for long context", False),
+    ],
+)
+def test_success_overage_stderr_patterns(stderr, expected):
+    raw = parse_claude_envelope(json.dumps(_bare("success_text")), stderr, 0)
+    assert raw.overage is expected
+
+
 @pytest.mark.parametrize("name", ["success_text", "success_schema"])
 def test_real_success_fixtures_do_not_trip(name):
     assert parse_claude_envelope(json.dumps(_bare(name)), "", 0).overage is False
