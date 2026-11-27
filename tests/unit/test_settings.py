@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from yt_video.settings import PROJECT_ROOT, load_settings
+from yt_video.settings import PROJECT_ROOT, Settings, load_settings
 
 
 def test_defaults(tmp_path):
@@ -52,3 +52,12 @@ def test_niche_list_and_paths(tmp_path):
 def test_overrides_win(tmp_path):
     s = load_settings(env_file=tmp_path / "missing.env", state_dir=tmp_path / "st")
     assert s.state_dir == Path(tmp_path / "st")
+
+
+def test_empty_env_values_are_ignored(tmp_path, monkeypatch):
+    monkeypatch.setenv("STATE_DIR", "")
+    monkeypatch.setenv("RUNS_DIR", "")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    s = Settings(_env_file=None)
+    assert s.state_dir != PROJECT_ROOT and s.runs_dir != PROJECT_ROOT
+    assert s.state_dir.name == "state" and s.openai_api_key is None
