@@ -95,6 +95,7 @@ Git history is kept: no rewrites, and the work lands as normal commits on a feat
    - Long script: 1,200–1,900 words, 24–36 `[SCENE:label]` markers. Markers stay inline in the `long_script` string field.
    - Shorts script: 110–180 words.
    - SEO title: ≤ 70 chars. Description: 400–480 chars. Tags: exactly 10.
+   - *Amended 2026-11-27 after a real run failed on near misses (1,080 and 1,191 words, 183 Shorts words, 342-char description):* the numbers above stay as the **prompt targets**. Validators accept a wider band and reject only broken output: long 1,000–2,200 words with 20–40 markers, Shorts 90–220 words, title ≤ 100 chars (YouTube's limit), description 250–700 chars, and 8–15 tags (trimmed to 10).
 9. **Cloudflare provider:** built and contract-tested against fixtures written from Cloudflare's API docs. It is skipped unless credentials are set, and its live test runs only when they are.
 
 ## 6. Design

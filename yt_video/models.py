@@ -16,11 +16,17 @@ from pydantic import BaseModel, field_validator, model_validator
 
 SCENE_MARKER_RE = re.compile(r"\[SCENE:[^\]]+\]")
 
-LONG_WORDS = (1200, 1900)
-SCENE_MARKERS = (24, 36)
-SHORTS_WORDS = (110, 180)
-SEO_TITLE_MAX = 70
-SEO_DESC_LEN = (400, 480)
+# Acceptance bounds, deliberately wider than the targets the prompt asks for
+# (prompts/write_script.md: 1200-1900 words, 24-36 markers, 110-180 Shorts
+# words, title <= 70, description 400-480, exactly 10 tags). LLMs miss word
+# and character counts by 5-15%; a near miss must not fail the run. These only
+# reject output that is genuinely broken.
+LONG_WORDS = (1000, 2200)
+SCENE_MARKERS = (20, 40)
+SHORTS_WORDS = (90, 220)
+SEO_TITLE_MAX = 100          # YouTube's hard title limit
+SEO_DESC_LEN = (250, 700)
+SEO_TAG_RANGE = (8, 15)      # accepted count; extras beyond SEO_TAG_COUNT are trimmed
 SEO_TAG_COUNT = 10
 REVIEW_SCORE = (0, 100)
 
@@ -99,9 +105,10 @@ class ScriptOutput(BaseModel):
     @field_validator("seo_tags")
     @classmethod
     def _check_tags(cls, v: list[str]) -> list[str]:
-        if len(v) != SEO_TAG_COUNT:
-            raise ValueError(f"seo_tags must contain exactly {SEO_TAG_COUNT} tags (got {len(v)})")
-        return v
+        lo, hi = SEO_TAG_RANGE
+        if not lo <= len(v) <= hi:
+            raise ValueError(f"seo_tags must contain {lo}-{hi} tags (got {len(v)})")
+        return v[:SEO_TAG_COUNT]
 
 
 class PackagingVariant(BaseModel):

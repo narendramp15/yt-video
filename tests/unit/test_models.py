@@ -60,17 +60,17 @@ def test_valid_script_passes() -> None:
 @pytest.mark.parametrize(
     "kw",
     [
-        dict(words=1199),
-        dict(words=1901),
-        dict(scenes=23),
-        dict(scenes=37),
-        dict(shorts=109),
-        dict(shorts=181),
-        dict(title="T" * 71),
-        dict(desc="d" * 399),
-        dict(desc="d" * 481),
-        dict(tags=9),
-        dict(tags=11),
+        dict(words=999),
+        dict(words=2201),
+        dict(scenes=19),
+        dict(scenes=41),
+        dict(shorts=89),
+        dict(shorts=221),
+        dict(title="T" * 101),
+        dict(desc="d" * 249),
+        dict(desc="d" * 701),
+        dict(tags=7),
+        dict(tags=16),
     ],
 )
 def test_quality_bars_reject(kw: dict) -> None:
@@ -80,21 +80,37 @@ def test_quality_bars_reject(kw: dict) -> None:
 
 @pytest.mark.parametrize(
     "kw",
-    [dict(words=1200), dict(words=1900), dict(scenes=24), dict(scenes=36),
-     dict(shorts=110), dict(shorts=180), dict(title="T" * 70),
-     dict(desc="d" * 400), dict(desc="d" * 480)],
+    [dict(words=1000), dict(words=2200), dict(scenes=20), dict(scenes=40),
+     dict(shorts=90), dict(shorts=220), dict(title="T" * 100),
+     dict(desc="d" * 250), dict(desc="d" * 700), dict(tags=8), dict(tags=15)],
 )
 def test_quality_bar_boundaries_accepted(kw: dict) -> None:
     ScriptOutput.model_validate(make_script(**kw))
 
 
+@pytest.mark.parametrize(
+    "kw",
+    # Near misses from a real run (2026-11-27): prompt targets are 1200-1900
+    # words, 110-180 Shorts words and a 400-480 char description, but an LLM
+    # that lands slightly outside must not fail the stage.
+    [dict(words=1080), dict(words=1191, shorts=183, desc="d" * 342)],
+)
+def test_near_misses_of_prompt_targets_are_accepted(kw: dict) -> None:
+    ScriptOutput.model_validate(make_script(**kw))
+
+
+def test_extra_tags_are_trimmed_to_ten() -> None:
+    script = ScriptOutput.model_validate(make_script(tags=13))
+    assert script.seo_tags == [f"tag{i}" for i in range(10)]
+
+
 def test_scene_marker_words_not_counted() -> None:
-    # 1200 real words + 30 markers: counting markers would give 1230 (still
-    # valid), so check the lower edge: 1199 words + 30 markers must fail
-    # even though raw token count is 1229.
-    ScriptOutput.model_validate(make_script(words=1200, scenes=30))
+    # 1000 real words + 30 markers: counting markers would give 1030 (still
+    # valid), so check the lower edge: 999 words + 30 markers must fail
+    # even though raw token count is 1029.
+    ScriptOutput.model_validate(make_script(words=1000, scenes=30))
     with pytest.raises(ValidationError):
-        ScriptOutput.model_validate(make_script(words=1199, scenes=30))
+        ScriptOutput.model_validate(make_script(words=999, scenes=30))
 
 
 def test_scene_prompt_map() -> None:
