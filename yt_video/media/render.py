@@ -500,35 +500,45 @@ def create_video(
     return out_path
 
 
-def create_shorts_video(
+SHORTS_MAX_DURATION_S = 175.0  # YouTube Shorts allow up to 3 minutes
+
+
+def _clamp_cues(cues: list[dict], duration: float) -> list[dict]:
+    """Drop cues starting at/after ``duration`` and trim the rest to end by it."""
+    out: list[dict] = []
+    for cue in cues:
+        start = float(cue.get("start", 0.0))
+        if start >= duration:
+            continue
+        end = min(float(cue.get("end", start + 1.0)), duration)
+        out.append({**cue, "end": end})
+    return out
+
+
+def _build_shorts_composite(
     voice_path: Path,
     scene_images: dict[str, str],
     captions: list[dict],
-    out_path: Path,
-    settings: Settings,
-) -> Path:
-    """Assemble a vertical Shorts video (1080x1920) from shorts voice + scene stills.
+    max_duration: float = SHORTS_MAX_DURATION_S,
+) -> VideoClip:
+    """Vertical Shorts clip whose audio, background and captions share one duration.
 
-    Captions are always burned in for mute feed viewing (``settings`` is accepted
-    for interface symmetry with :func:`create_video`).
+    The duration is the voice length, capped at ``max_duration``; no layer runs past it.
     """
-    from moviepy import (
-        AudioFileClip, CompositeVideoClip, VideoClip, concatenate_videoclips,
-    )
+    from moviepy import AudioFileClip, CompositeVideoClip, VideoClip, concatenate_videoclips
     from moviepy.audio.fx import AudioFadeIn, AudioFadeOut
 
-    del settings
     _SW, _SH = 1080, 1920
-    voice_path = Path(voice_path)
-    out_path = Path(out_path)
-    if not voice_path.exists():
-        raise FileNotFoundError(f"Shorts voice not found: {voice_path}")
-
     voice = AudioFileClip(str(voice_path))
-    voice = voice.with_effects([AudioFadeIn(0.2), AudioFadeOut(0.3)])
-    duration = min(float(voice.duration), 55.0)
-    voice = voice.subclipped(0, duration)
-    logger.info("Shorts voice duration: %.1fs", duration)
+    voice_duration = float(voice.duration)
+    duration = min(voice_duration, max_duration)
+    if voice_duration > max_duration:
+        logger.warning(
+            "Shorts voice is %.1fs, longer than the %.1fs cap; truncating audio, video and captions",
+            voice_duration, max_duration,
+        )
+    voice = voice.subclipped(0, duration).with_effects([AudioFadeIn(0.2), AudioFadeOut(0.3)])
+    logger.info("Shorts duration: %.1fs", duration)
 
     paths = [p for p in scene_images.values() if p and Path(p).exists()]
     if not paths:
@@ -543,13 +553,34 @@ def create_shorts_video(
         bg = concatenate_videoclips(clips, method="compose").subclipped(0, duration)
 
     overlays: list[VideoClip] = []
-    if captions:
-        overlays.extend(_make_caption_clips(captions, size=(_SW, _SH)))
+    cues = _clamp_cues(captions, duration)
+    if cues:
+        overlays.extend(_make_caption_clips(cues, size=(_SW, _SH)))
         logger.info("Shorts: burning %d caption cue(s)", len(overlays))
 
     final_video = CompositeVideoClip([bg] + overlays, size=(_SW, _SH)) if overlays else bg
-    final_video = final_video.with_audio(voice)
+    return final_video.with_duration(duration).with_audio(voice)
 
+
+def create_shorts_video(
+    voice_path: Path,
+    scene_images: dict[str, str],
+    captions: list[dict],
+    out_path: Path,
+    settings: Settings,
+) -> Path:
+    """Assemble a vertical Shorts video (1080x1920) from shorts voice + scene stills.
+
+    Captions are always burned in for mute feed viewing (``settings`` is accepted
+    for interface symmetry with :func:`create_video`).
+    """
+    del settings
+    voice_path = Path(voice_path)
+    out_path = Path(out_path)
+    if not voice_path.exists():
+        raise FileNotFoundError(f"Shorts voice not found: {voice_path}")
+
+    final_video = _build_shorts_composite(voice_path, scene_images, captions)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Rendering Shorts -> %s ...", out_path)
     final_video.write_videofile(str(out_path), fps=24, codec="libx264", audio_codec="aac")
