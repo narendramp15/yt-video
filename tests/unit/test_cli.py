@@ -228,6 +228,29 @@ def test_setup_failure_returns_1_and_keeps_run(store, monkeypatch):
     assert run is not None and run.status == "running"
 
 
+def test_file_handler_failure_returns_1_and_keeps_run(store, monkeypatch):
+    def boom(path):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(cli, "add_run_file_handler", boom)
+    assert main([]) == 1
+    assert store.latest_unfinished() is not None
+
+
+def test_summary_failure_does_not_change_exit(monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setattr(Pipeline, "run", lambda self, ctx: "done")
+
+    def boom(rows):
+        raise RuntimeError("bad rows")
+
+    monkeypatch.setattr(cli, "format_run_summary", boom)
+    with caplog.at_level(logging.WARNING, logger="yt-video"):
+        assert main([]) == 0
+    assert "run summary unavailable" in caplog.text
+
+
 def test_main_py_shim():
     proc = subprocess.run(
         ["uv", "run", "python", "main.py", "--variant", "1"],

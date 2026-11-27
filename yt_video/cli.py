@@ -207,8 +207,9 @@ def _pipeline_run(settings: Settings, args: argparse.Namespace) -> int:
     if run is None:
         run = store.create(now)
 
-    handler = add_run_file_handler(run.path("pipeline.log"))
+    handler = None
     try:
+        handler = add_run_file_handler(run.path("pipeline.log"))
         from yt_video.pipeline.stages.publish import ALL_STAGES
         from yt_video.providers.image.chain import build_image_chain
         from yt_video.providers.llm.router import build_router
@@ -235,15 +236,19 @@ def _pipeline_run(settings: Settings, args: argparse.Namespace) -> int:
         log.exception("pipeline failed in run %s (re-run to resume)", run.id)
         return EXIT_ERROR
     else:
-        print(format_run_summary(ledger.run_rows(run.id)))
-        print(clip.summary())
+        try:
+            print(format_run_summary(ledger.run_rows(run.id)))
+            print(clip.summary())
+        except Exception as exc:  # noqa: BLE001 - summary never changes the outcome
+            log.warning("run summary unavailable: %s", exc)
         if outcome == "awaiting_approval":
             print(AWAITING_TEXT)
             return EXIT_AWAITING
         return EXIT_OK
     finally:
-        get_logger().removeHandler(handler)
-        handler.close()
+        if handler is not None:
+            get_logger().removeHandler(handler)
+            handler.close()
 
 
 def main(argv: list[str] | None = None) -> int:
