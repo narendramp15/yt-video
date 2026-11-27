@@ -12,7 +12,7 @@ $analytics_note$tts_note
 Return only JSON matching the provided schema.
 
 QUALITY BARS (the output is rejected if any is missed):
-- long_script: 1,200 to 1,900 words, with 24 to 36 [SCENE:label] markers kept inline.
+- long_script: 1,200 to 1,900 words, with 24 to 36 [SCENE:label] markers inside the string, each on its own line.
 - shorts_script: 110 to 180 words.
 - seo_title: at most 70 characters.
 - seo_description: 400 to 480 characters.

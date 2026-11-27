@@ -32,3 +32,14 @@ def test_strip_scene_markers_removes_non_spoken_lines():
     script = '[SCENE:intro]\n(pause)\nNarrator: "Hello world."\nPlain line.'
     assert strip_scene_markers(script) == "Hello world.\nPlain line."
     assert strip_section_markers(script) == strip_scene_markers(script)
+
+
+def test_inline_scene_marker_is_stripped_from_narration():
+    assert strip_scene_markers("[SCENE:s1] Hello there") == "Hello there"
+    assert strip_scene_markers("Before [SCENE:s2] after.\nNext") == "Before after.\nNext"
+
+
+def test_inline_marker_still_parsed_by_scene_alignment():
+    script = "[SCENE:s1] Hello there\n[SCENE:s2] Bye"
+    assert scene_labels(script) == ["s1", "s2"]
+    assert scene_texts(script) == {"s1": "Hello there", "s2": "Bye"}
