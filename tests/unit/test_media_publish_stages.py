@@ -517,3 +517,14 @@ def test_wait_then_cli_approve_then_rerun_uploads(ctx_after_text, settings, monk
     assert _run(ctx) == "done"
     assert ctx.youtube.uploads[0]["privacy_status"] == "public"
     assert ctx.run.get("publish")["video_id"] == "vid1"
+
+
+def test_missing_pending_file_is_written_before_waiting(ctx_after_text):
+    ctx = ctx_after_text
+    path = ctx.run.path("packaging_pending.json")
+    path.unlink()
+    assert _run(ctx) == "awaiting_approval"
+    pending = read_json(path)
+    assert pending["approved"] is False and pending["rejected"] is False
+    assert pending["variants"] and pending["winner"] and pending["slug"] == ctx.run.slug
+    assert pending["chosen_index"] is None and pending["format_id"]

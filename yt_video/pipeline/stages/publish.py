@@ -31,7 +31,13 @@ from yt_video.models import Review, ScriptOutput
 from yt_video.pipeline.context import RunContext
 from yt_video.pipeline.runner import Stage, StageOutcome
 from yt_video.pipeline.stages.media import MEDIA_STAGES
-from yt_video.pipeline.stages.text import PENDING_FILE, TEXT_STAGES, PackagingData, RankData
+from yt_video.pipeline.stages.text import (
+    PENDING_FILE,
+    TEXT_STAGES,
+    PackagingData,
+    PackagingStage,
+    RankData,
+)
 
 log = get_logger(__name__)
 
@@ -97,6 +103,12 @@ class PublishStage:
         partial: dict[str, Any] = dict(ctx.run.get(self.name))
         video_id: str | None = partial.get("video_id")
         required = s.packaging_require_approval
+        if required and not ctx.run.path(PENDING_FILE).exists():
+            # Missing gate file: write it so --approve/--reject have something to act on.
+            PackagingStage._write_pending(
+                ctx, topic, angle, [v.model_dump() for v in pkg.variants],
+                pkg.winner.model_dump(), pkg.slug,
+            )
         pending = _read_pending(ctx) if required else {}
         approved = pending.get("approved") is True
         rejected = pending.get("rejected") is True
