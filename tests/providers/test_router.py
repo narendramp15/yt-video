@@ -59,6 +59,15 @@ def test_invalid_then_valid_retries_same_provider():
     assert openai.requests == []
 
 
+def test_no_json_provider_error_retries_once_then_succeeds():
+    claude, openai = pair([ProviderError("invalid_output", "no JSON in claude output"), {"title": "c"}])
+    result = LLMRouter([claude, openai], None, "r").complete(req(Out), "s")
+    assert result.provider == "claude_cli"
+    assert len(claude.requests) == 2
+    assert "no JSON in claude output" in claude.requests[1].prompt
+    assert openai.requests == []
+
+
 def test_invalid_twice_falls_back():
     claude, openai = pair([{"wrong": 1}, {"wrong": 2}])
     result = LLMRouter([claude, openai], None, "r").complete(req(Out), "s")

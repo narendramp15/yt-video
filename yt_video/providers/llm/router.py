@@ -56,6 +56,11 @@ class LLMRouter:
                 raw = provider.complete(current)
             except ProviderError as err:
                 self._record_failed(provider.name, stage, err, err.kind)
+                log.warning("%s attempt %d failed (%s): %s", provider.name, attempt, err.kind, err)
+                if err.kind == "invalid_output" and attempt == 1:
+                    # Model returned no parseable JSON: one corrective retry, like a validation failure.
+                    current = replace(req, prompt=req.prompt + _RETRY_SUFFIX.format(errors=str(err)))
+                    continue
                 if err.kind == "usage_limit":
                     self.disabled.add(provider.name)
                 self._note_failure(provider.name, err.kind, attempts)
@@ -64,6 +69,7 @@ class LLMRouter:
             if errors is None:
                 return self._finish(raw, parsed, stage, attempts)
             self._record_failed(provider.name, stage, raw, "invalid_output")
+            log.warning("%s attempt %d failed validation: %s", provider.name, attempt, errors)
             if attempt == 1:
                 current = replace(req, prompt=req.prompt + _RETRY_SUFFIX.format(errors=errors))
         self._note_failure(provider.name, "invalid_output", attempts)
