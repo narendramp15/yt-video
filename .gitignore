@@ -25,3 +25,9 @@ state/
 
 # Generated knowledge graph (graphify)
 graphify-out/
+
+# Durable cross-run state (costs.db, memory JSON, OAuth token) lives in state/
+# (already ignored above); per-run folders live under output/runs/ (covered by output/).
+
+# Google OAuth client file (secret) - never commit
+client_secret*.json

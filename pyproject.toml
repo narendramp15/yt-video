@@ -1,25 +1,25 @@
 [project]
 name = "yt-video"
 version = "0.1.0"
-description = "100% free trend-driven YouTube pipeline (Edge TTS + Pollinations + local FFmpeg)"
+description = "Trend-driven YouTube pipeline (Claude CLI + Edge TTS + free image providers + local FFmpeg)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     # Core AI / LLM
     "openai>=1.30.0",
     "python-dotenv>=1.0.0",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
 
     # FREE TTS — Microsoft Edge TTS
-    "edge-tts>=6.1.9",
-    "pydub>=0.25.1",
+    "edge-tts>=7.3.1",
 
     # FREE trend signals
     "pytrends>=4.9.2",
     "beautifulsoup4>=4.12.0",
 
-    # Market data / charts
+    # Market data (news headlines for topic discovery)
     "yfinance>=0.2.40",
-    "mplfinance>=0.12.10b0",
     "matplotlib>=3.8.0",
     "pandas>=2.0.0",
 
@@ -55,8 +55,22 @@ all = [
 ]
 
 [dependency-groups]
-dev = []
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["yt_video"]
+
+[project.scripts]
+yt-video = "yt_video.cli:main"
 
 [tool.uv]
-# Application project (flat layout: main.py / config.py / services/) — not published as a package.
-package = false
+package = true
+
+[tool.pytest.ini_options]
+markers = ["live: real network/CLI calls"]
+addopts = "-m 'not live'"
+testpaths = ["tests"]

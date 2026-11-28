@@ -1,384 +1,233 @@
-﻿# yt-video — 100% Free Trend-Driven YouTube Pipeline
+﻿# yt-video — Trend-Driven YouTube Pipeline
 
-Automated faceless YouTube channel pipeline that turns **trending topics** into polished YouTube videos — with zero paid API dependencies and two self-improving feedback loops that get better with every run.
+Automated faceless YouTube channel pipeline. It turns trending topics into a long-form video plus a Short, publishes them, and learns from the results through two feedback loops (TTS quality and YouTube Analytics).
 
-> **Separate from `yt_ai_factory/`** — that pipeline handles NIFTY 50 candlestick-chart videos. This pipeline is for general trending-topic content only.
-
----
-
-## Cost Comparison
-
-| Component | Original (Paid) | yt-video (Free) | Monthly Saving |
-|---|---|---|---|
-| AI Voiceover | ElevenLabs `$22–$99/mo` | **Microsoft Edge TTS** (300+ voices, no key) | **$22–$99** |
-| Scene Illustrations | DALL-E / Flux API `$3–$12/mo` | **Pollinations.ai** (no API key needed) | **$3–$12** |
-| Serverless Rendering | AWS Lambda `$5–$20/mo` | **Local machine / GitHub Actions** (free CI) | **$5–$20** |
-| Trend & News Signals | NewsAPI `$49/mo` | **pytrends + Reddit PRAW + RSS** (all free) | **$49** |
-| **Total** | **$79–$180/month** | **~$0.07/month** (LLM script generation only) | **$79–$180** |
+The LLM work runs on your **Claude CLI subscription** (zero marginal cost), with a cheap OpenAI fallback. Voice, images and rendering are free or local.
 
 ---
 
 ## Quick Start
 
 ```bash
-# 1. Install dependencies (uv — fast, lockfile-backed)
+# 1. Install dependencies (uv, lockfile-backed)
 uv sync
 
-# 2. Configure environment
+# 2. Configure
 cp env.example .env
-# Edit .env — only OPENAI_API_KEY + YOUTUBE_CLIENT_SECRET are required
+# Edit .env. If the Claude CLI is logged in, only the REQUIRED block of env.example is needed:
+# YOUTUBE_CLIENT_SECRET, CHANNEL_NAME and DEFAULT_CATEGORY.
 
-# 3. Run the pipeline
+# 3. Run the pipeline (resumes the unfinished run, if any)
 uv run python main.py
 
-# 4. Force a full re-run (clear today's checkpoint)
-uv run python main.py --restart
-
-# 5. List all available Edge TTS voices
-uv run python main.py --list-voices
-
-# 6. Fetch YouTube Analytics 48h+ after upload (improves next run)
-uv run python main.py --fetch-analytics
+# 4. Run the tests (live tests are deselected by default)
+uv run pytest -q
 ```
 
-All commands run from the repository root.
+All commands run from the repository root. `uv run yt-video ...` is equivalent to `uv run python main.py ...`.
+
+Prerequisites: Python 3.11+, `ffmpeg` on PATH, and the `claude` CLI logged in via OAuth. The CLI is invoked with `-p`, never `--bare` (which would disable subscription auth), from an empty temp directory with `--setting-sources ""` so your global CLAUDE.md, hooks and plugins are not loaded.
 
 ---
 
-## Full Pipeline Architecture
+## CLI
 
-```
-Phase 1 — Trend Discovery
-  pytrends (Google Trends India)
-  + Reddit PRAW (r/IndiaInvestments, r/technology, r/india)
-  + RSS feeds (yfinance news, general)
-        |
-        v
-  AI filter + virality score  <-- YouTube Analytics memory injected (run 2+)
-        |
-        v
-  Top 3 ranked topics -> pick #1 (highest score)
-
-Phase 2 — Script Generation  (one mega-prompt AI call)
-  Topic + angle + trend signals
-  + TTS style memory (learned from past runs)      <-- TTS feedback loop
-  + Analytics performance notes (retention, CTR)  <-- Analytics feedback loop
-        |
-        v
-  [LONG_SCRIPT]     — 8–12 min narration with [SCENE:label] visual markers
-  [SHORTS_SCRIPT]   — 50–60 sec punchy version
-  [SEO_TITLE]       — under 70 chars, high CTR
-  [SEO_DESCRIPTION] — 400–480 chars with CTA
-  [SEO_TAGS]        — 10 tags (broad + specific)
-
-Phase 3 — Media Assets  (all free)
-  Edge TTS         ->  output/voice.mp3
-  Pollinations.ai  ->  one image per [SCENE:label] (24-36 dense scene beats)
-                        topic-aware prompts + unique seeds -> visually distinct scenes
-  CLIP verify      ->  scores each image vs its scene subject; regenerates
-                        off-topic images with a fresh seed (content-to-scene gate)
-                        + thumbnail (1280x720)
-  faster-whisper   ->  word timestamps + narration-word scene alignment
-
-Phase 4 — Render  (local FFmpeg via MoviePy)
-  Scene images + voice + optional bg music  ->  output/final_video.mp4  (1920x1080)
-
-Phase 5 — Review & Publish
-  AI score gate       ->  score >= 80 -> public, else private
-  YouTube Data API v3 ->  upload with full SEO metadata + thumbnail
-  record_video()      ->  saves metadata for 48h analytics fetch
-  _log_analytics()    ->  output/analytics_log.json (immediate snapshot)
-
-48h+ later: python main.py --fetch-analytics
-  YouTube Analytics API v2  ->  views, retention %, watch time, likes, subs gained
-  yt_analytics_memory.json  ->  topic + script notes injected into next run
-```
-
-Checkpoint: `output/pipeline_state.json` — re-run resumes from the failed step automatically.
-
-## Optional Royalty-Free Background Music
-
-Drop one or more tracks you have the right to use into `assets/music/` at the
-project root. The renderer will automatically use the first supported audio file
-it finds there. To force one exact track, set `BACKGROUND_MUSIC_TRACK` in `.env`.
-
-Supported extensions: `.mp3`, `.wav`, `.m4a`, `.aac`, `.ogg`, `.flac`.
-
-Example:
-
-```bash
-BACKGROUND_MUSIC_ENABLED=true
-BACKGROUND_MUSIC_DIR=assets/music
-# BACKGROUND_MUSIC_TRACK=assets/music/calm-bed.mp3
-```
-
-For original locally generated music, use `tools/generate_music_audiocraft.py`.
-It is kept out of the main runtime because AudioCraft usually needs a separate
-Python 3.11/3.12 environment with Torch installed.
-
----
-
-## Pipeline Checkpoint Steps
-
-| Step | Key | What happens |
-|---|---|---|
-| 1 | `fetch_signals` | pytrends + Reddit + RSS → raw topic list |
-| 2 | `filter_topics` | AI batch call → top 3 ranked + scored topics |
-| 3 | `generate_script` | Mega-prompt → ScriptOutput (long + shorts + SEO) |
-| 4 | `review_script` | AI compliance score 0–100 |
-| 5 | `generate_voice` | Edge TTS → `output/voice.mp3` |
-| 6 | `generate_images` | Pollinations.ai → `output/images/<scene>_scene.jpg` |
-| 7 | `sync_scenes` | Whisper → `output/chart_timeline.json` + `output/transcript.json` |
-| 8 | `create_video` | MoviePy + FFmpeg → `output/final_video.mp4` |
-| 9 | `upload_video` | YouTube API → video ID recorded for analytics |
-
----
-
-## Project Structure
-
-```
-yt-video/
-├── main.py                              # CLI: --restart, --fetch-analytics, --list-voices
-├── config.py                            # All config via .env (absolute path, override=True)
-├── logger.py                            # Structured logger -> output/pipeline.log
-├── requirements.txt
-├── env.example
-├── services/
-│   ├── topic_service.py                 # pytrends + Reddit PRAW + RSS; filter_and_score_topics()
-│   ├── script_service.py                # Mega-prompt -> ScriptOutput dataclass; [SCENE:] markers
-│   ├── tts_service.py                   # Edge TTS (free) -> OpenAI fallback; applies learned corrections
-│   ├── tts_memory_service.py            # TTS feedback loop — learns from Whisper transcript each run
-│   ├── image_service.py                 # Pollinations.ai; per-scene prompts + CLIP verify/regenerate
-│   ├── clip_service.py                  # Local CLIP image-vs-scene relevance scoring
-│   ├── sync_service.py                  # faster-whisper / OpenAI Whisper; narration-word scene alignment
-│   ├── video_service.py                 # MoviePy + FFmpeg; Ken Burns on scene images
-│   ├── review_service.py                # AI compliance review (0–100 score)
-│   ├── checkpoint_service.py            # Step-level persistent checkpoint
-│   ├── youtube_service.py               # YouTube Data API v3 upload + thumbnail
-│   └── yt_analytics_memory_service.py   # Analytics feedback loop — fetch, learn, inject
-└── workflows/
-    └── long_video.py                    # Main orchestrator — 5-phase, 9-step pipeline
-```
-
----
-
-## Self-Improving Feedback Loops
-
-### Loop 1 — TTS Voice Quality (`tts_memory_service.py`)
-
-Runs after every pipeline execution. Reads the Whisper word-level transcript to find **hesitation words** — words preceded by >=0.35s silence, meaning Edge TTS stumbled on them.
-
-**What it learns across runs:**
-
-| Signal | Action |
+| Flag | Effect |
 |---|---|
-| ALL-CAPS acronyms that caused gaps (`API`, `IPO`) | Auto-adds `API -> A P I` to pronunciation corrections table |
-| Digit run-ons (`GPT4`, `AI2025`) | Auto-adds `GPT4 -> GPT 4` |
-| Long sentences (>20 words, >15% rate) | Injects "keep sentences under 20 words" note into next script prompt |
-| Frequent stumble words | Listed in prompt: *"TTS hesitated before 'ChatGPT' — spell phonetically"* |
+| *(none)* | Resume the unfinished run, or start a new one |
+| `--restart` | Discard the unfinished run and start fresh |
+| `--new` | Abandon the unfinished run (kept on disk) and start fresh |
+| `--no-upload` | Run everything except the YouTube upload |
+| `--claude-only` | Use only the Claude CLI provider (no OpenAI fallback) |
+| `--fetch-analytics` | Fetch YouTube Analytics for videos uploaded 48+ hours ago |
+| `--list-voices` | Print all Edge TTS voices and exit |
+| `--list-packaging` | Print the pending packaging variants and exit |
+| `--approve-packaging [--variant N]` | Approve pending packaging for public upload (optionally choose the 0-based variant) |
+| `--reject-packaging` | Reject packaging; the run uploads as private |
+| `--migrate-state` | Copy exactly five legacy v1 files into `state/` and exit: `tts_style_memory.json`, `costs.db`, `review_log.json`, `analytics_log.json`, `x_post_log.json` (never deletes or overwrites) |
 
-Memory file: `output/tts_style_memory.json`
+Exit codes: `0` done, `1` pipeline error, `2` usage error, `3` **awaiting packaging approval**.
 
-### Loop 2 — YouTube Analytics Performance (`yt_analytics_memory_service.py`)
-
-Fetches real viewer behaviour 48h after upload via YouTube Analytics API v2.
-
-**Metrics fetched:** `views`, `averageViewPercentage` (retention %), `averageViewDuration`, `likes`, `subscribersGained`, `estimatedMinutesWatched`
-
-**What it learns:**
-
-| Signal | Action |
-|---|---|
-| Topics with >=45% retention | Bias topic scoring toward similar topic keywords |
-| Topics with <30% retention | Penalise those keyword categories in scoring |
-| Low like-to-view ratio | Adds mid-video CTA instruction to script prompt |
-| Zero subscribers gained | Adds specific subscribe reason to script outro instructions |
-| Channel avg retention trend | Adjusts hook urgency instruction in script prompt |
-
-Memory file: `output/yt_analytics_memory.json`
-
-```bash
-# Run 48+ hours after any upload
-uv run python main.py --fetch-analytics
-```
+Approval flow (`PACKAGING_REQUIRE_APPROVAL=true` and the review would make the video public): the run stops with exit code 3. Inspect with `--list-packaging`, then `--approve-packaging` (or `--reject-packaging`) and re-run `main.py` to continue.
 
 ---
 
-## Script Format — [SCENE:label] Markers
+## Architecture: stages + providers
 
-The AI generates scripts with visual cue markers on their own lines. A marker is
-placed **every 2–4 sentences** — 24–36 per video — so each image covers one idea,
-not a whole chapter. Labels run `intro`, `s1`, `s2` … `sN`, `outro`:
+The `yt_video/` package is a linear pipeline of resumable **stages** that call swappable **providers**.
+
+```
+yt_video/
+  cli.py            argparse entry point (main.py is a thin shim)
+  settings.py       typed settings from .env (pydantic-settings)
+  costs.py          SQLite cost ledger (state/costs.db) + per-run summary
+  llm_tasks.py      LLM-facing tasks (rank topics, write script, review, packaging)
+  prompts/          prompt templates (string.Template, $name placeholders)
+  pipeline/
+    runner.py       runs stages in order, persists after each
+    run_store.py    run folders + run.json, single-unfinished-run invariant
+    stages/         text.py (topics, script, review) | media.py (voice, images, sync, render) | publish.py
+  providers/
+    llm/            claude_cli, openai_api, router (+ circuit breaker)
+    image/          pollinations, cloudflare, openai_image, placeholder, chain
+    tts.py          Edge TTS (OpenAI TTS fallback)
+    transcribe.py   faster-whisper (OpenAI Whisper fallback)
+  media/            images, CLIP verification, MoviePy/FFmpeg render
+  memory/           tts_memory, analytics_memory (the two feedback loops)
+  integrations/     trends (pytrends, RSS, yfinance news, X trends), youtube, x
+  domain/           pure logic: formats, packaging, captions, sync, topics, text
+```
+
+Pipeline flow:
+
+```
+Topic discovery   pytrends + RSS + yfinance news + X trends -> niche filter -> LLM rank/score
+        |            (YouTube Analytics memory injected from run 2 onward)
+Script            one LLM call -> long script with [SCENE:label] markers, Shorts script, SEO
+        |            (TTS style memory + analytics notes injected)
+Review            LLM compliance score 0-100; public only if score >= 80 AND safety == "Yes"
+        |            (anything doubtful is private)
+Media             Edge TTS voice -> scene images -> Whisper sync -> captions -> MoviePy render
+        |            (long video 1920x1080 + Short, thumbnail 1280x720)
+Publish           packaging variants -> optional approval gate -> YouTube upload -> X post
+```
+
+Every stage stores its output in `run.json`, so a failed run resumes at the failed stage.
+
+---
+
+## LLM providers
+
+`LLM_PROVIDERS=claude_cli,openai` (ordered).
+
+- **Claude CLI first.** `sonnet` for the script tier, `haiku` for the light tier. Calls are recorded in the ledger at `cost_usd = 0.0`; the envelope's cost is kept as `notional_cost_usd`. Timeouts: `CLAUDE_TIMEOUT_SCRIPT_S` (600) and `CLAUDE_TIMEOUT_LIGHT_S` (180).
+- **OpenAI fallback** (`OPENAI_FALLBACK_MODEL=gpt-6-luna`, $0.10 / $0.50 per 1M tokens). `OPENAI_API_KEY` is **optional**: without it the fallback is simply unavailable.
+- **Circuit breaker.** The first usage-limit, rate-limit or overage signal from Claude trips the breaker and Claude is skipped for the rest of the run. (Overload/529 and "extra usage required for long context" are not treated as usage limits.)
+- **`--claude-only`** removes the OpenAI fallback for that run.
+- Structured outputs use `--json-schema` on Claude and strict structured outputs on OpenAI (same schema).
+
+---
+
+## Images
+
+Default chain: `IMAGE_PROVIDERS=pollinations,cloudflare,placeholder`. Providers without credentials are skipped; `placeholder` is an offline gradient, so image generation never fails. OpenAI images are never in the default chain.
+
+| Provider | Notes |
+|---|---|
+| `pollinations` | Free tier: **1 image / 45 s / IP**, **1024x576 cap**, **logo watermark**. A `POLLINATIONS_KEY` removes all three (the min interval becomes 0). `POLLINATIONS_MIN_INTERVAL_S` sets the free-tier spacing. |
+| `cloudflare` | Workers AI free tier. Needs `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`. |
+| `openai` | Paid; opt-in only (`OPENAI_IMAGE_MODEL`, `OPENAI_IMAGE_QUALITY`). |
+| `placeholder` | Offline PIL gradient; last resort. |
+
+Because of the free-tier spacing, a 30-scene video spends roughly 20+ minutes on images without a Pollinations key. A provider that keeps returning HTTP errors is disabled for the run, and the run summary reports it.
+
+CLIP verification (`CLIP_VERIFY`, `CLIP_MIN_SCORE=0.24`) scores each image against its scene subject and regenerates off-topic ones. If `torch`/`transformers` are missing, the first valid image is accepted. Install with `uv sync --extra clip` (or `--extra all`).
+
+---
+
+## Script format: [SCENE:label] markers
+
+The script contains markers on their own lines (every 2-4 sentences: `intro`, `s1` ... `sN`, `outro`). They drive image generation and are stripped before TTS and before the review step, so they are never spoken or reviewed as text.
 
 ```
 [SCENE:intro]
 A hundred billion dollars. That's what one Indian company just committed to AI...
 
 [SCENE:s1]
-But why now? And why Reliance?...
-
-[SCENE:s2]
-Their refinery business alone funds the entire bet...
-
-[SCENE:outro]
-The wave is coming. Whether it lifts all boats or washes away the unprepared...
+But why now?...
 ```
-
-- `strip_scene_markers()` removes them before TTS — they are **never spoken**
-- `transcribe_and_sync()` aligns each scene's first narration words against the
-  Whisper word stream to find exactly where that scene starts in the audio
-- `generate_scene_images_for_scenes()` generates one Pollinations image per scene
-  from the scene's specific subject, then **CLIP-verifies** it matches and
-  regenerates off-topic images with a fresh seed
 
 ---
 
-## Free Components — Details
+## Feedback loops
 
-### Microsoft Edge TTS (replaces ElevenLabs)
-
-No API key, no account. Saves $22–$99/month.
-
-```
-EDGE_TTS_VOICE=en-IN-NeerjaNeural   # female Indian English (default)
-EDGE_TTS_VOICE=en-IN-PrabhatNeural  # male Indian English
-```
-
-```bash
-uv run python main.py --list-voices   # see all 300+ voices
-```
-
-### Pollinations.ai (replaces DALL-E / Flux)
-
-No API key needed. Each scene gets a unique prompt built from the scene's specific
-subject, position-based visual style, and a different seed per scene.
-
-Fallback chain: Pollinations -> PIL gradient (always works offline).
-
-```
-POLLINATIONS_MODEL=flux           # default
-POLLINATIONS_MODEL=flux-realism   # more photorealistic
-POLLINATIONS_KEY=your_key         # optional: removes rate limits
-```
-
-### CLIP content-to-scene verification
-
-Every generated image is scored for semantic relevance to its scene subject
-using a local CLIP model (`openai/clip-vit-base-patch32`, CPU, free). Images
-below the score threshold are regenerated with a fresh seed (up to 3 tries);
-the best attempt is kept. Each run logs a video-level accuracy summary:
-
-```
-CLIP scene accuracy: mean 0.291 over 31 scenes, 28/31 (90%) cleared threshold 0.24
-```
-
-Requires `torch` + `transformers` (installed by `uv sync`). If absent, the
-pipeline runs unchanged — the first valid image is accepted and a warning logged.
-
-```
-CLIP_VERIFY=1        # 1 = verify+regenerate (default), 0 = disable
-CLIP_MIN_SCORE=0.24  # accept threshold (cosine similarity)
-CLIP_MODEL=openai/clip-vit-base-patch32
-```
-
-### pytrends + Reddit PRAW (replaces NewsAPI)
-
-**pytrends** — Google Trends India, no key needed.
-
-**Reddit PRAW** setup:
-1. https://www.reddit.com/prefs/apps → Create App → Script
-2. Add to `.env`:
-   ```
-   REDDIT_CLIENT_ID=your_id
-   REDDIT_CLIENT_SECRET=your_secret
-   REDDIT_USER_AGENT=yt-video/1.0
-   ```
+1. **TTS memory** (`state/tts_style_memory.json`). After each run the Whisper word timestamps are scanned for hesitations (gaps >= 0.35 s). It learns pronunciation corrections (`API -> A P I`, `GPT4 -> GPT 4`), sentence-length notes and stumble words, and injects them into the next script prompt.
+2. **YouTube Analytics memory** (`state/yt_analytics_memory.json`). `--fetch-analytics` (run 48+ hours after upload) pulls views, retention, watch time, likes and subscribers gained, and learns topic and hook/CTA notes for the next run.
 
 ---
 
-## Environment Variables
+## Packaging and publishing
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `OPENAI_API_KEY` | Yes | — | Script generation + Whisper API fallback |
-| `YOUTUBE_CLIENT_SECRET` | Yes | `client_secret.json` | Path to Google OAuth JSON (auto-resolved to project root) |
-| `CHANNEL_NAME` | Yes | — | Your YouTube channel name |
-| `SCRIPT_MODEL` | — | `gpt-4o-mini` | `gpt-4o-mini` · `deepseek-chat` · `deepseek-reasoner` |
-| `DEEPSEEK_API_KEY` | — | — | Required if `SCRIPT_MODEL=deepseek-*` |
-| `EDGE_TTS_VOICE` | — | `en-IN-NeerjaNeural` | Edge TTS voice ID |
-| `POLLINATIONS_MODEL` | — | `flux` | Pollinations image model |
-| `POLLINATIONS_KEY` | — | — | Optional auth key (removes rate limits) |
-| `CLIP_VERIFY` | — | `1` | `1` = CLIP image verification on, `0` = off |
-| `CLIP_MIN_SCORE` | — | `0.24` | Image-vs-scene accept threshold (cosine similarity) |
-| `CLIP_MODEL` | — | `openai/clip-vit-base-patch32` | HuggingFace CLIP model id |
-| `REDDIT_CLIENT_ID` | — | — | Reddit PRAW app ID |
-| `REDDIT_CLIENT_SECRET` | — | — | Reddit PRAW app secret |
-| `REDDIT_USER_AGENT` | — | `yt-video/1.0` | Reddit API user agent |
-| `DEFAULT_CATEGORY` | — | `25` | YouTube category ID (25 = News & Politics) |
+- 3 title/hook variants (`PACKAGING_VARIANTS`), heuristic pick, thumbnail with hook text overlay (`THUMBNAIL_TEXT_ENABLED`), chapters, and an up-next blurb.
+- Niche lock (`CHANNEL_PRIMARY_NICHE`, `NICHE_LOCK_ENABLED`) hard-filters topics; it falls back to the unfiltered list if everything is dropped.
+- Shorts (`SHORTS_ENABLED`): audio, background and captions share one capped duration (175 s).
+- X posting after a public upload (`X_*` keys, `X_DAILY_POST_LIMIT`, `X_POST_PUBLIC_ONLY`).
+
+Background music: drop tracks you may use commercially into `assets/music/` (`.mp3 .wav .m4a .aac .ogg .flac`). The first one is used, or set `BACKGROUND_MUSIC_TRACK`.
 
 ---
 
-## Optional: DeepSeek (cheaper AI)
+## Run folders and state
 
-```
-SCRIPT_MODEL=deepseek-chat
-DEEPSEEK_API_KEY=sk-...
-```
-
-~$0.01/month vs ~$0.06/month with gpt-4o-mini. Same quality for most topics.
-
----
-
-## Optional: faster-whisper (local transcription)
-
-```bash
-uv add faster-whisper   # ~500 MB (ctranslate2)
-```
-
-Falls back to OpenAI Whisper API automatically if not installed.
-
-First run downloads model weights to a local cache (one-time):
-faster-whisper `base` ~145 MB, CLIP model ~600 MB.
-
----
-
-## Output Files
+Per-run artifacts live in `output/runs/<YYYY-MM-DD>_<HHMMSS>/` (git-ignored via `output/`):
 
 | File | Description |
 |---|---|
-| `output/script.txt` | Generated narration script |
-| `output/voice.mp3` | Edge TTS voiceover |
-| `output/images/<scene>_scene.jpg` | Pollinations scene backgrounds |
-| `output/images/thumbnail.jpg` | YouTube thumbnail (1280×720) |
-| `output/chart_timeline.json` | Scene label → start timestamp (seconds) |
-| `output/transcript.json` | Whisper word-level timestamps |
-| `output/final_video.mp4` | Finished 1080p video |
-| `output/review_log.json` | AI compliance review log |
-| `output/pipeline_state.json` | Checkpoint state (resume on failure) |
-| `output/pipeline.log` | Full run log |
-| `output/tts_style_memory.json` | TTS feedback loop memory (grows across runs) |
-| `output/yt_analytics_memory.json` | Analytics feedback loop memory |
-| `output/analytics_log.json` | Immediate post-upload analytics snapshot |
+| `run.json` | Stage results, slug, privacy decision; the resume source of truth |
+| `packaging_pending.json` | Packaging awaiting approval |
+| `<slug>.mp4`, `<slug>_shorts.mp4` | Rendered videos |
+| voice, images, thumbnail, captions, transcript | Stage artifacts |
+| run log | Full log for that run |
+
+Durable cross-run state lives in `state/` (git-ignored):
+
+| File | Description |
+|---|---|
+| `costs.db` | SQLite cost ledger (real and notional costs) |
+| `tts_style_memory.json` | TTS feedback loop memory |
+| `yt_analytics_memory.json` | Analytics feedback loop memory |
+| `analytics_log.json` | Post-upload analytics snapshots |
+| `review_log.json` | Review log (newline-delimited JSON) |
+| `x_post_log.json` | X posting log (daily cap) |
+| `youtube_token.json` | Cached OAuth token (Data + Analytics scopes) |
+| `playlists.json` | Playlist cache |
+
+Upgrading from v1: run `uv run python main.py --migrate-state` once to copy the five legacy files listed above from `output/` into `state/`. `yt_analytics_memory.json`, the OAuth token and the playlist cache are not copied (the token is re-created on first sign-in).
+
+Only one unfinished run exists at a time; use `--new` or `--restart` to move on.
 
 ---
 
-## GitHub Actions (Scheduled CI)
+## Environment variables
 
-Workflow: `.github/workflows/yt-video-pipeline.yml` — runs Mon–Fri 06:30 IST automatically.
+`env.example` is the authoritative, commented list and mirrors `yt_video/settings.py`. Highlights:
 
-**Secrets** (Settings → Secrets → Actions):
+| Variable | Default | Description |
+|---|---|---|
+| `YOUTUBE_CLIENT_SECRET` | `client_secret.json` | Google OAuth client JSON |
+| `CHANNEL_NAME` | none | Channel name (tags) |
+| `LLM_PROVIDERS` | `claude_cli,openai` | LLM order |
+| `CLAUDE_MODEL_SCRIPT` / `CLAUDE_MODEL_LIGHT` | `sonnet` / `haiku` | Claude model aliases |
+| `CLAUDE_TIMEOUT_SCRIPT_S` / `CLAUDE_TIMEOUT_LIGHT_S` | `600` / `180` | Per-call timeouts |
+| `OPENAI_API_KEY` | none (optional) | Fallback LLM, OpenAI TTS/Whisper/images |
+| `OPENAI_FALLBACK_MODEL` | `gpt-6-luna` | Fallback model |
+| `IMAGE_PROVIDERS` | `pollinations,cloudflare,placeholder` | Image chain |
+| `POLLINATIONS_MODEL` / `POLLINATIONS_KEY` / `POLLINATIONS_MIN_INTERVAL_S` | `flux` / none / `45` | Pollinations |
+| `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` | none | Cloudflare Workers AI |
+| `EDGE_TTS_VOICE` / `EDGE_TTS_RATE` / `EDGE_TTS_PITCH` | `en-IN-NeerjaNeural` / `-8%` / `+1Hz` | Voice |
+| `PACKAGING_REQUIRE_APPROVAL` | `false` | Gate public uploads (exit code 3) |
+| `CHANNEL_PRIMARY_NICHE` | none | Comma-separated niche keywords |
+| `STATE_DIR` / `RUNS_DIR` | `state` / `output/runs` | Storage locations |
 
-| Secret | Value |
-|---|---|
-| `OPENAI_API_KEY` | or `DEEPSEEK_API_KEY` |
-| `YOUTUBE_CLIENT_SECRET_JSON` | Paste full contents of `client_secret.json` |
-| `REDDIT_CLIENT_ID` | Optional |
-| `REDDIT_CLIENT_SECRET` | Optional |
+---
 
-**Variables** (Settings → Variables → Actions, optional):
+## Optional extras
 
+```bash
+uv sync --extra whisper   # faster-whisper local transcription (~145 MB base model)
+uv sync --extra clip      # torch + transformers for CLIP verification (~600 MB)
+uv sync --extra all
 ```
-SCRIPT_MODEL=gpt-4o-mini
-EDGE_TTS_VOICE=en-IN-NeerjaNeural
-POLLINATIONS_MODEL=flux
+
+Without faster-whisper, transcription falls back to the OpenAI Whisper API (needs `OPENAI_API_KEY`).
+
+---
+
+## Testing
+
+```bash
+uv run pytest -q                 # unit + provider tests; no network, no real claude binary
+uv run pytest -m live            # real Claude CLI / image provider calls (opt-in)
 ```
+
+Layout: `tests/unit`, `tests/providers`, `tests/live` (marker `live`, deselected by default).
